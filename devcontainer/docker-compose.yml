@@ -1,0 +1,48 @@
+services:
+  firewall:
+    build:
+      context: firewall/Dockerfile
+    volumes:
+      - ./allowed_domains.txt:/etc/squid/allowed_domains.txt:ro
+    networks:
+      - external
+      - internal
+    restart: unless-stopped
+
+  devcontainer:
+    build:
+      dockerfile: Dockerfile
+    command: sleep infinity
+    volumes:
+      - ..:/workspace:cached
+      # Mount host's global Claude config and the devenv repo so that
+      # ~/.claude/* relative symlinks (created by devenv's scripts/install.sh)
+      # resolve inside the container, and edits to claude files propagate
+      # live in both directions. Adjust /root if the container user is not root.
+      - ${HOME}/.claude:/home/node/.claude
+      - ${HOME}/devenv:/home/node/devenv
+      - pnpm-store:/home/node/.local/share/pnpm/store
+    working_dir: /workspace
+    environment:
+      HTTP_PROXY: http://firewall:3128
+      HTTPS_PROXY: http://firewall:3128
+      http_proxy: http://firewall:3128
+      https_proxy: http://firewall:3128
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+    networks:
+      - internal
+    depends_on:
+      - firewall
+
+volumes:
+  pnpm-store:
+    external: true
+    name: shared-pnpm-store
+
+networks:
+  external:
+    driver: bridge
+  internal:
+    driver: bridge
+    internal: true

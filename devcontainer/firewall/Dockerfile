@@ -1,0 +1,15 @@
+FROM ubuntu:24.04
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends squid curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY squid.conf /etc/squid/squid.conf
+COPY start.sh /usr/local/bin/start.sh
+RUN chmod +x /usr/local/bin/start.sh
+
+RUN mkdir -p /var/log/squid && chown -R proxy:proxy /var/log/squid
+
+EXPOSE 3128
+
+CMD ["/usr/local/bin/start.sh"]

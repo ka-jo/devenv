@@ -1,0 +1,15 @@
+api.anthropic.com
+.github.com
+github.com
+registry.npmjs.org
+.npmjs.com
+marketplace.visualstudio.com
+.vsassets.io
+.blob.core.windows.net
+update.code.visualstudio.com
+.ubuntu.com
+security.ubuntu.com
+archive.ubuntu.com
+pypi.org
+.pypi.org
+.pythonhosted.org
