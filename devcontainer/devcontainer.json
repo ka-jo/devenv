@@ -18,5 +18,5 @@
       ]
     }
   },
-  "postStartCommand": "bash /workspace/devcontainer/firewall/verify.sh"
+  "postStartCommand": "bash /workspace/.devcontainer/firewall/verify.sh"
 }

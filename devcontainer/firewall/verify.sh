@@ -2,7 +2,7 @@
 # Verify egress firewall: all allowed domains reachable, blocked domains are not.
 set -euo pipefail
 
-ALLOWED_DOMAINS_FILE="/workspace/devcontainer/firewall/allowed_domains.txt"
+ALLOWED_DOMAINS_FILE="/workspace/.devcontainer/firewall/allowed_domains.txt"
 BLOCKED_DOMAIN="google.com"
 
 PASS=0
