@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
 
 cmd_update() {
     git -C "$REPO_DIR" pull
@@ -11,6 +11,14 @@ cmd_devcontainer() {
     local SRC_DIR="$REPO_DIR/devcontainer"
     local DEST_DIR="$(pwd)/.devcontainer"
     local PRESERVE=(allowed_domains.txt devcontainer.json)
+    local CONTAINER_NAME=""
+
+    while [[ "${1:-}" == --* ]]; do
+        case "$1" in
+            --name) CONTAINER_NAME="$2"; shift 2 ;;
+            *) echo "unknown option: $1"; exit 1 ;;
+        esac
+    done
 
     is_preserved() {
         local rel="$1"
@@ -34,6 +42,12 @@ cmd_devcontainer() {
         echo "copied: $dest"
     done < <(find "$SRC_DIR" -type f -print0)
 
+    if [[ -n "$CONTAINER_NAME" ]]; then
+        local dc_json="$DEST_DIR/devcontainer.json"
+        sed -i "s/\"name\": \"[^\"]*\"/\"name\": \"$CONTAINER_NAME\"/" "$dc_json"
+        echo "set name: $CONTAINER_NAME"
+    fi
+
     if ! docker volume inspect shared-pnpm-store &>/dev/null; then
         docker volume create shared-pnpm-store
         echo "created docker volume: shared-pnpm-store"
@@ -46,13 +60,13 @@ cmd_devcontainer() {
 
 case "${1:-}" in
     update)       cmd_update ;;
-    devcontainer) cmd_devcontainer ;;
+    devcontainer) shift; cmd_devcontainer "$@" ;;
     *)
         echo "usage: devenv <command>"
         echo ""
         echo "commands:"
         echo "  update          pull the latest devenv repo"
-        echo "  devcontainer    copy/update .devcontainer in the current project"
+        echo "  devcontainer [--name <name>]    copy/update .devcontainer in the current project"
         exit 1
         ;;
 esac
