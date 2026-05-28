@@ -3,5 +3,20 @@
   "dockerComposeFile": "docker-compose.yml",
   "service": "devcontainer",
   "workspaceFolder": "/workspace",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "claudeCode.allowDangerouslySkipPermissions": true
+      },
+      "extensions": [
+        "Vue.volar",
+        "ms-dotnettools.csdevkit",
+        "oxc.oxc-vscode",
+        "vitest.explorer",
+        "usernamehw.errorlens",
+        "EditorConfig.EditorConfig"
+      ]
+    }
+  },
   "postStartCommand": "bash /workspace/devcontainer/firewall/verify.sh"
 }
