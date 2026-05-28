@@ -31,6 +31,12 @@ services:
       https_proxy: http://firewall:3128
       NO_PROXY: localhost,127.0.0.1
       no_proxy: localhost,127.0.0.1
+      # Make Node's built-in http/https modules respect proxy env vars (Node 22+).
+      # (see: https://nodejs.org/learn/http/enterprise-network-configuration)
+      NODE_USE_ENV_PROXY: "1"
+      # Pin the pnpm store to the shared volume mount point regardless of
+      # which user the container process runs as. (see: https://github.com/orgs/pnpm/discussions/9460)
+      npm_config_store_dir: /home/node/.local/share/pnpm/store
     networks:
       - internal
     depends_on:
