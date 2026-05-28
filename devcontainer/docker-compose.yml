@@ -3,7 +3,7 @@ services:
     build:
       context: firewall/Dockerfile
     volumes:
-      - ./allowed_domains.txt:/etc/squid/allowed_domains.txt:ro
+      - ./firewall/allowed_domains.txt:/etc/squid/allowed_domains.txt:ro
     networks:
       - external
       - internal
