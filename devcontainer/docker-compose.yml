@@ -1,7 +1,8 @@
 services:
   firewall:
     build:
-      context: firewall/Dockerfile
+      context: firewall
+      dockerfile: Dockerfile
     volumes:
       - ./firewall/allowed_domains.txt:/etc/squid/allowed_domains.txt:ro
     networks:
