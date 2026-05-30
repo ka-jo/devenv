@@ -20,9 +20,9 @@ services:
       # ~/.claude/* relative symlinks (created by devenv's scripts/install.sh)
       # resolve inside the container, and edits to claude files propagate
       # live in both directions. Adjust /root if the container user is not root.
-      - ${HOME}/.claude:/home/node/.claude
-      - ${HOME}/devenv:/home/node/devenv
-      - pnpm-store:/home/node/.local/share/pnpm/store
+      - ${HOME}/.claude:/home/ka-jo/.claude
+      - ${HOME}/devenv:/home/ka-jo/devenv
+      - pnpm-store:/home/ka-jo/.pnpm-store
     working_dir: /workspace
     environment:
       HTTP_PROXY: http://firewall:3128
@@ -36,7 +36,7 @@ services:
       NODE_USE_ENV_PROXY: "1"
       # Pin the pnpm store to the shared volume mount point regardless of
       # which user the container process runs as. (see: https://github.com/orgs/pnpm/discussions/9460)
-      npm_config_store_dir: /home/node/.local/share/pnpm/store
+      pnpm_config_store_dir: /home/ka-jo/.pnpm-store
     networks:
       - internal
     depends_on:

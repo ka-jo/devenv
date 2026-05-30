@@ -6,7 +6,17 @@
   "customizations": {
     "vscode": {
       "settings": {
-        "claudeCode.allowDangerouslySkipPermissions": true
+        "claudeCode.allowDangerouslySkipPermissions": true,
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "bash",
+            "icon": "terminal-bash"
+          },
+          "zsh": {
+            "path": "zsh"
+          }
+        }
       },
       "extensions": [
         "Vue.volar",
@@ -14,9 +24,27 @@
         "oxc.oxc-vscode",
         "vitest.explorer",
         "usernamehw.errorlens",
-        "EditorConfig.EditorConfig"
+        "EditorConfig.EditorConfig",
+        "anthropic.claude-code"
       ]
     }
   },
-  "postStartCommand": "bash /workspace/.devcontainer/firewall/verify.sh"
+  "remoteUser": "ka-jo",
+  "containerUser": "ka-jo",
+  "remoteEnv": {
+    "HISTFILE": "/home/ka-jo/commandhistory/.zsh_history"
+  },
+  "mounts": [
+    {
+      "source": "ka-jo-zsh-history",
+      "target": "/home/ka-jo/commandhistory",
+      "type": "volume"
+    }
+  ],
+  "postCreateCommand": {
+    "linkDevenv": "ln -sf /home/ka-jo/devenv/scripts/devenv /home/ka-jo/.local/bin/devenv",
+    "installNode": "fnm install",
+    "installDeps": "pnpm install"
+  },
+  "postStartCommand": "zsh /workspace/.devcontainer/firewall/verify.sh"
 }
