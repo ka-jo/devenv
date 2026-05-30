@@ -1,7 +1,7 @@
 FROM ubuntu:24.04
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends squid curl ca-certificates \
+    && apt-get install -y --no-install-recommends squid curl ca-certificates inotify-tools \
     && rm -rf /var/lib/apt/lists/*
 
 COPY squid.conf /etc/squid/squid.conf
