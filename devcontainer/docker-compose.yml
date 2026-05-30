@@ -9,6 +9,13 @@ services:
       - external
       - internal
     restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/3128"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
 
   devcontainer:
     build:
@@ -40,7 +47,8 @@ services:
     networks:
       - internal
     depends_on:
-      - firewall
+      firewall:
+        condition: service_healthy
 
 volumes:
   pnpm-store:
