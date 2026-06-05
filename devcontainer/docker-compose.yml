@@ -23,6 +23,13 @@ services:
     command: sleep infinity
     volumes:
       - ..:/workspace:cached
+      # Re-mount the firewall config read-only, overlaying the read-write
+      # /workspace mount above. The egress allowlist is a host-controlled trust
+      # boundary: a process inside this (sandboxed) container must not be able to
+      # widen its own network access by editing allowed_domains.txt. Edit it from
+      # the host instead — the firewall sidecar reads the same host file and
+      # live-reloads on change.
+      - ./firewall:/workspace/.devcontainer/firewall:ro
       # Mount host's global Claude config and the devenv repo so that
       # ~/.claude/* relative symlinks (created by devenv's scripts/install.sh)
       # resolve inside the container, and edits to claude files propagate
