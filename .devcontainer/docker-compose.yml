@@ -1,0 +1,70 @@
+services:
+  firewall:
+    build:
+      context: firewall
+      dockerfile: Dockerfile
+    volumes:
+      - ./firewall/allowed_domains.txt:/etc/squid/allowed_domains.txt:ro
+    networks:
+      - external
+      - internal
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/3128"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
+
+  devcontainer:
+    build:
+      dockerfile: Dockerfile
+    command: sleep infinity
+    volumes:
+      - ..:/workspace:cached
+      # Re-mount the firewall config read-only, overlaying the read-write
+      # /workspace mount above. The egress allowlist is a host-controlled trust
+      # boundary: a process inside this (sandboxed) container must not be able to
+      # widen its own network access by editing allowed_domains.txt. Edit it from
+      # the host instead — the firewall sidecar reads the same host file and
+      # live-reloads on change.
+      - ./firewall:/workspace/.devcontainer/firewall:ro
+      # Mount host's global Claude config and the devenv repo so that
+      # ~/.claude/* relative symlinks (created by devenv's scripts/install.sh)
+      # resolve inside the container, and edits to claude files propagate
+      # live in both directions. Adjust /root if the container user is not root.
+      - ${HOME}/.claude:/home/ka-jo/.claude
+      - ${HOME}/devenv:/home/ka-jo/devenv
+      - pnpm-store:/home/ka-jo/.pnpm-store
+    working_dir: /workspace
+    environment:
+      HTTP_PROXY: http://firewall:3128
+      HTTPS_PROXY: http://firewall:3128
+      http_proxy: http://firewall:3128
+      https_proxy: http://firewall:3128
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+      # Make Node's built-in http/https modules respect proxy env vars (Node 22+).
+      # (see: https://nodejs.org/learn/http/enterprise-network-configuration)
+      NODE_USE_ENV_PROXY: "1"
+      # Pin the pnpm store to the shared volume mount point regardless of
+      # which user the container process runs as. (see: https://github.com/orgs/pnpm/discussions/9460)
+      pnpm_config_store_dir: /home/ka-jo/.pnpm-store
+    networks:
+      - internal
+    depends_on:
+      firewall:
+        condition: service_healthy
+
+volumes:
+  pnpm-store:
+    external: true
+    name: shared-pnpm-store
+
+networks:
+  external:
+    driver: bridge
+  internal:
+    driver: bridge
+    internal: true
