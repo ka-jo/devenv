@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Personal dev environment config with two payloads:
 
 1. **`claude/`** — global Claude Code config (CLAUDE.md, rules, skills, agents, commands, output-styles). `scripts/install.sh` symlinks each top-level entry into `~/.claude/` using **relative** links (`../devenv/claude/...`).
-2. **`devcontainer/`** — a dev container template copied into other projects by `devenv devcontainer`. App container + Squid egress firewall sidecar on an `internal: true` Docker network; default-deny allowlist in `firewall/allowed_domains.txt`.
+2. **`devcontainer/`** — a dev container template copied into other projects by `devenv devcontainer`. Debian-Trixie app container (runs as non-root user `ka-jo`; zsh + fnm + pnpm + Claude Code) plus a Squid egress firewall sidecar on an `internal: true` Docker network; default-deny allowlist in `firewall/allowed_domains.txt`. The app container is gated on the firewall's health check (`depends_on: service_healthy`); `firewall/start.sh` watches the allowlist and SIGHUPs Squid to reload it live; `firewall/verify.sh` runs on `postStartCommand` to confirm enforcement (non-fatal). The `firewall/` dir is re-mounted **read-only** into the app container (overlaying the rw `/workspace` mount) so a sandboxed process can't widen its own egress — the allowlist is edited from the host only; don't remove that `:ro` overlay.
 
 There is no build, test, or lint step. The repo is bash scripts + config files.
 
@@ -24,7 +24,7 @@ Add a `link_relative` line to `scripts/install.sh` and re-run it. The script is 
 ## CLI
 
 - `devenv update` — `git pull` in `~/devenv`.
-- `devenv devcontainer` — copy/refresh `.devcontainer/` in the cwd; creates the `shared-pnpm-store` Docker volume on first run.
+- `devenv devcontainer [--name <name>]` — copy/refresh `.devcontainer/` in the cwd; creates the `shared-pnpm-store` Docker volume on first run. `--name` rewrites the `"name"` field in `devcontainer.json`.
 
 ## Commit conventions
 
