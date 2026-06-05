@@ -21,7 +21,7 @@ USER ka-jo
 ENV SHELL=/bin/zsh
 ENV HOME=/home/ka-jo
 
-RUN mkdir -p /home/ka-jo/.local/bin /home/ka-jo/commandhistory
+RUN mkdir -p /home/ka-jo/.local/bin /home/ka-jo/commandhistory /home/ka-jo/.pnpm-store
 ENV PATH="/home/ka-jo/.local/bin:${PATH}"
 
 # Install fnm
