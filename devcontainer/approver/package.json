@@ -1,0 +1,10 @@
+{
+  "name": "devcontainer-approver",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Egress approval broker for the dev container firewall (Squid external_acl backend).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

@@ -1,4 +1,32 @@
 services:
+  # Egress approval broker. Squid's external_acl helper submits non-allowlisted
+  # requests here and blocks; a human approves/denies via the token-gated
+  # /decision endpoint (host-side only — the token is never in the app container).
+  approver:
+    build:
+      context: approver
+      dockerfile: Dockerfile
+    environment:
+      # Sourced from .devcontainer/.env (gitignored, host-generated). Gating
+      # approval on a token the sandboxed app container never sees is the trust
+      # boundary: the app container can reach approver but cannot forge approvals.
+      APPROVER_TOKEN: ${APPROVER_TOKEN:-}
+    # Published to the host loopback so the host-side VS Code extension (and, in
+    # Phase 1, host curl) can reach the decision endpoint. `external` carries the
+    # published port; `internal` is how the firewall helper + app container reach it.
+    ports:
+      - "127.0.0.1:3129:3129"
+    networks:
+      - external
+      - internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3129/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
+
   firewall:
     build:
       context: firewall
@@ -10,6 +38,9 @@ services:
       - internal
     restart: unless-stopped
     stop_grace_period: 30s
+    depends_on:
+      approver:
+        condition: service_started
     healthcheck:
       test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/3128"]
       interval: 2s

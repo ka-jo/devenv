@@ -2,3 +2,8 @@
 node_modules/
 *.tgz
 dist/
+
+# Host-generated approver token (never committed). Lives next to the compose file
+# so Docker Compose auto-loads it for ${APPROVER_TOKEN} substitution.
+.devcontainer/.env
+devcontainer/.env
