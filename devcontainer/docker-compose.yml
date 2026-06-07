@@ -36,6 +36,7 @@ services:
       # live in both directions. Adjust /root if the container user is not root.
       - ${HOME}/.claude:/home/ka-jo/.claude
       - ${HOME}/devenv:/home/ka-jo/devenv
+      - ./managed-settings.json:/etc/claude-code/managed-settings.json:ro
       - pnpm-store:/home/ka-jo/.pnpm-store
     working_dir: /workspace
     environment:
