@@ -11,6 +11,10 @@ cmd_devcontainer() {
     local SRC_DIR="$REPO_DIR/devcontainer"
     local DEST_DIR="$(pwd)/.devcontainer"
     local PRESERVE=(allowed_domains.txt devcontainer.json)
+    local EXCLUDE=(
+        '*/node_modules/*'
+        '*/bun.lock'
+    )
     local CONTAINER_NAME=""
 
     while [[ "${1:-}" == --* ]]; do
@@ -30,6 +34,11 @@ cmd_devcontainer() {
 
     mkdir -p "$DEST_DIR"
 
+    local find_exclude=()
+    for pattern in "${EXCLUDE[@]}"; do
+        find_exclude+=(-not -path "$pattern")
+    done
+
     while IFS= read -r -d '' src; do
         rel="${src#$SRC_DIR/}"
         dest="$DEST_DIR/$rel"
@@ -40,13 +49,12 @@ cmd_devcontainer() {
         mkdir -p "$(dirname "$dest")"
         cp "$src" "$dest"
         echo "copied: $dest"
-    done < <(find "$SRC_DIR" -type f -print0)
+    done < <(find "$SRC_DIR" -type f "${find_exclude[@]}" -print0)
 
-    if [[ -n "$CONTAINER_NAME" ]]; then
-        local dc_json="$DEST_DIR/devcontainer.json"
-        sed -i "s/\"name\": \"[^\"]*\"/\"name\": \"$CONTAINER_NAME\"/" "$dc_json"
-        echo "set name: $CONTAINER_NAME"
-    fi
+    local dc_json="$DEST_DIR/devcontainer.json"
+    local name="${CONTAINER_NAME:-$(basename "$(pwd)")}"
+    sed -i "s/\"name\": \"[^\"]*\"/\"name\": \"$name\"/" "$dc_json"
+    echo "set name: $name"
 
     if ! docker volume inspect shared-pnpm-store &>/dev/null; then
         docker volume create shared-pnpm-store
