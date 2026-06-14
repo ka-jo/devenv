@@ -42,6 +42,7 @@
       "type": "volume"
     }
   ],
+  "onCreateCommand": "sudo chown ka-jo:ka-jo /home/ka-jo/.pnpm-store",
   "postCreateCommand": {
     "linkDevenv": "ln -sf /home/ka-jo/devenv/scripts/devenv /home/ka-jo/.local/bin/devenv",
     "installNode": "fnm install",
