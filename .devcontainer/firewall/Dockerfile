@@ -6,7 +6,8 @@ RUN apt-get update \
 
 COPY squid.conf /etc/squid/squid.conf
 COPY start.sh /usr/local/bin/start.sh
-RUN chmod +x /usr/local/bin/start.sh
+COPY approve_helper.sh /usr/local/bin/approve_helper.sh
+RUN chmod +x /usr/local/bin/start.sh /usr/local/bin/approve_helper.sh
 
 RUN mkdir -p /var/log/squid \
     && ln -sf /dev/stdout /var/log/squid/access.log \
