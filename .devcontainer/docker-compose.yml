@@ -1,15 +1,63 @@
 services:
+  # Egress approval broker. Squid's external_acl helper submits non-allowlisted
+  # requests here and blocks; a human approves/denies via the token-gated
+  # /decision endpoint (host-side only — the token is never in the app container).
+  approver:
+    build:
+      context: approver
+      dockerfile: Dockerfile
+    environment:
+      # OPTIONAL override. Left empty by default: the approver mints a fresh random
+      # token per start and writes it to the tmpfs below, so the secret never lands
+      # in a host file the app container bind-mounts (..:/workspace) and can read.
+      # The host retrieves it out-of-band via:
+      #   docker compose exec approver cat /run/approver/token
+      # Set this (via .devcontainer/.env) only to pin a token for testing — doing so
+      # reintroduces that file as a readable surface, so prefer the generated path.
+      # Network segmentation (below) is the primary control keeping the app container
+      # away from the approver; the token is defense-in-depth on the one unavoidable
+      # surface — the host-published /decision port.
+      APPROVER_TOKEN: ${APPROVER_TOKEN:-}
+    # In-RAM mount for the generated token. Wiped on container stop; never on disk.
+    tmpfs:
+      - /run/approver
+    # Published to the host loopback so the host-side decider (Phase 2 VS Code
+    # extension; Phase 1 host curl) can reach the decision endpoint. The approver
+    # sits on `external` ONLY — deliberately NOT on proxy_net — so the sandboxed
+    # app container has no network route to it whatsoever (can't submit spurious
+    # prompts, can't read /pending, can't hit /decision). The firewall's helper
+    # reaches it over `external`; the host reaches it via the published port.
+    # (Port publishing requires a non-internal bridge, so `external` is also why
+    # the approver has outbound internet — acceptable: it never initiates egress.)
+    ports:
+      - "127.0.0.1:3129:3129"
+    networks:
+      - external
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3129/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
+
   firewall:
     build:
       context: firewall
       dockerfile: Dockerfile
     volumes:
       - ./firewall/allowed_domains.txt:/etc/squid/allowed_domains.txt:ro
+    # `external` = real internet egress + the path to the approver; `proxy_net` =
+    # the internal-only segment shared with the app container (which reaches Squid
+    # here but, having no other network, can reach nothing else directly).
     networks:
       - external
-      - internal
+      - proxy_net
     restart: unless-stopped
     stop_grace_period: 30s
+    depends_on:
+      approver:
+        condition: service_started
     healthcheck:
       test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/3128"]
       interval: 2s
@@ -52,8 +100,10 @@ services:
       # Pin the pnpm store to the shared volume mount point regardless of
       # which user the container process runs as. (see: https://github.com/orgs/pnpm/discussions/9460)
       pnpm_config_store_dir: /home/ka-jo/.pnpm-store
+    # On proxy_net ONLY: the app container's sole network reach is Squid. It has no
+    # route to the approver (decision authority) or the internet except through it.
     networks:
-      - internal
+      - proxy_net
     depends_on:
       firewall:
         condition: service_healthy
@@ -66,6 +116,8 @@ volumes:
 networks:
   external:
     driver: bridge
-  internal:
+  # Internal-only segment between the app container and Squid. `internal: true`
+  # means no direct outbound; the app container's only escape is via the proxy.
+  proxy_net:
     driver: bridge
     internal: true
