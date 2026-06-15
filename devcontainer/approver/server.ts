@@ -68,6 +68,13 @@ interface RequestMetadata {
   method: string;
   /** Full request URL when available (plain HTTP); "" for HTTPS CONNECT tunnels. */
   url: string;
+  /**
+   * The Claude session this egress is attributed to, decoded by the proxy adapter
+   * from the client's Proxy-Authorization token, or "" when untagged (anonymous).
+   * Render-only like all metadata: the approver never keys or gates on it —
+   * per-session policy is an extension concern. See PROTOCOL.md.
+   */
+  sessionId: string;
 }
 
 /** Request lifecycle state: pending is non-terminal; the rest are terminal and immutable. */
@@ -131,7 +138,11 @@ async function parseRequestMetadata(
   const rawUrl = body.url;
   const url = typeof rawUrl === "string" ? rawUrl.trim() : "";
 
-  return { host, method, url };
+  const rawSessionId = body.sessionId;
+  const sessionId =
+    typeof rawSessionId === "string" ? rawSessionId.trim() : "";
+
+  return { host, method, url, sessionId };
 }
 
 /**
@@ -178,7 +189,9 @@ interface RequestEntry {
 const requests = new Map<string, RequestEntry>();
 
 /** Set of SSE stream controllers for broadcasting. Cleaned up on client disconnect. */
-const streamControllers = new Set<ReadableStreamDefaultController<Uint8Array>>();
+const streamControllers = new Set<
+  ReadableStreamDefaultController<Uint8Array>
+>();
 
 /**
  * Resolve all blocked helpers and SSE subscribers on a request reaching terminal state.
@@ -319,7 +332,9 @@ async function postRequests(req: Request): Promise<Response> {
     waiters: new Set(),
   };
   requests.set(id, entry);
-  console.log(`[request] ${id} ${metadata.method} ${metadata.url || metadata.host}`);
+  console.log(
+    `[request] ${id} [${metadata.sessionId || "anon"}] ${metadata.method} ${metadata.url || metadata.host}`,
+  );
 
   // Broadcast to all SSE subscribers.
   broadcastAdded(request);
@@ -425,7 +440,7 @@ function handleGetRequestsSSE(): Response {
     headers: {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
-      "connection": "keep-alive",
+      connection: "keep-alive",
     },
   });
 }
@@ -452,7 +467,9 @@ function getRequest(req: BunRequest<"/requests/:id">): Response {
  * @param req The incoming request with params.id populated by Bun's router.
  * @returns A Response with the terminal request or an error.
  */
-async function patchRequest(req: BunRequest<"/requests/:id">): Promise<Response> {
+async function patchRequest(
+  req: BunRequest<"/requests/:id">,
+): Promise<Response> {
   const id = req.params.id;
   const entry = requests.get(id);
   if (!entry) {
@@ -461,10 +478,7 @@ async function patchRequest(req: BunRequest<"/requests/:id">): Promise<Response>
 
   // Refuse to transition out of terminal states.
   if (entry.request.status !== "pending") {
-    return Response.json(
-      { error: "already terminal" },
-      { status: 409 },
-    );
+    return Response.json({ error: "already terminal" }, { status: 409 });
   }
 
   const body = await parsePatchVerdictBody(req);
@@ -474,9 +488,7 @@ async function patchRequest(req: BunRequest<"/requests/:id">): Promise<Response>
   const status = body;
 
   const terminal = settle(id, status);
-  console.log(
-    `[verdict] ${status} ${id}`,
-  );
+  console.log(`[verdict] ${status} ${id}`);
 
   return Response.json(terminal);
 }
@@ -497,7 +509,7 @@ Bun.serve({
   port: PORT,
   maxRequestBodySize: 64 * 1024,
   routes: {
-    "/health": (): Response => new Response("OK"),
+    "/health": new Response("OK"),
     "/requests": {
       POST: postRequests,
       GET: (req: Request): Response => {
@@ -518,7 +530,7 @@ Bun.serve({
         return patchRequest(req);
       },
     },
-    "/*": (): Response => new Response("not found", { status: 404 }),
+    "/*": new Response("not found", { status: 404 }),
   },
   error(err: Error): Response {
     console.error(err);
