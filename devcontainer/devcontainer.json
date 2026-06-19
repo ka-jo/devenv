@@ -1,11 +1,12 @@
 {
-  "name": "devcontainer",
+  "name": "__name__",
   "dockerComposeFile": "docker-compose.yml",
   "service": "devcontainer",
   "workspaceFolder": "/workspace",
   "customizations": {
     "vscode": {
       "settings": {
+        "egressApprover.containerName": "__name__-approver",
         "claudeCode.allowDangerouslySkipPermissions": true,
         "claudeCode.initialPermissionMode": "bypassPermissions",
         "terminal.integrated.defaultProfile.linux": "zsh",

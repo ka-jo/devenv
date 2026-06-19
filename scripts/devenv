@@ -71,10 +71,10 @@ cmd_devcontainer() {
         echo "copied: $dest"
     done < <(find "$SRC_DIR" -type f "${find_exclude[@]}" -print0)
 
-    local dc_json="$DEST_DIR/devcontainer.json"
     local name="${CONTAINER_NAME:-$(basename "$(pwd)")}"
-    sed -i "s/\"name\": \"[^\"]*\"/\"name\": \"$name\"/" "$dc_json"
-    echo "set name: $name"
+
+    sed -i "s/__name__/$name/g" "$DEST_DIR/devcontainer.json" "$DEST_DIR/docker-compose.yml"
+    echo "set name: $name, approver container: ${name}-approver"
 
     if ! docker volume inspect shared-pnpm-store &>/dev/null; then
         docker volume create shared-pnpm-store

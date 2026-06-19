@@ -6,6 +6,7 @@
   "customizations": {
     "vscode": {
       "settings": {
+        "egressApprover.containerName": "devenv-approver",
         "claudeCode.allowDangerouslySkipPermissions": true,
         "claudeCode.initialPermissionMode": "bypassPermissions",
         "terminal.integrated.defaultProfile.linux": "zsh",
