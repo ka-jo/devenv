@@ -42,10 +42,10 @@
           "default": "",
           "description": "Dev-only: pin the approver token (must match APPROVER_TOKEN). Leave empty to retrieve the generated token from the running container via 'docker compose exec'."
         },
-        "egressApprover.dockerComposeFile": {
+        "egressApprover.containerName": {
           "type": "string",
           "default": "",
-          "description": "Path to the devcontainer docker-compose.yml used for token retrieval ('docker compose -f <file> exec approver'). Defaults to <workspace>/.devcontainer/docker-compose.yml."
+          "description": "Approver container name or ID for token retrieval ('docker exec <name> cat /run/approver/token'). Leave empty to auto-discover via 'docker ps --filter label=com.docker.compose.service=approver' (first match). Set this if multiple dev containers with an approver service are running simultaneously."
         }
       }
     }

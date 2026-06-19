@@ -6,8 +6,11 @@ export interface ApproverConfig {
   endpoint: string;
   /** Pinned dev token; empty means "retrieve from the container". */
   token: string;
-  /** Explicit docker-compose.yml path for token retrieval; empty means "derive from workspace". */
-  dockerComposeFile: string;
+  /**
+   * Explicit container name or ID for token retrieval; empty means
+   * "auto-discover via `docker ps --filter label=com.docker.compose.service=approver`".
+   */
+  containerName: string;
 }
 
 /**
@@ -20,6 +23,6 @@ export function readConfig(): ApproverConfig {
   return {
     endpoint: endpoint.replace(/\/+$/, ""),
     token: cfg.get<string>("token", "").trim(),
-    dockerComposeFile: cfg.get<string>("dockerComposeFile", "").trim(),
+    containerName: cfg.get<string>("containerName", "").trim(),
   };
 }

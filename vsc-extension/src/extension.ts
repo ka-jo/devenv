@@ -12,27 +12,32 @@ let stream: ApproverStream | undefined;
  * to an output channel — the bare host→approver channel, ahead of any UI.
  * @param context The extension context for registering disposables.
  */
+/** Return the current local time as `HH:MM:SS` for log prefixes. */
+function ts(): string {
+  return new Date().toTimeString().slice(0, 8);
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("Egress Approver");
   context.subscriptions.push(output);
 
   const config = readConfig();
-  output.appendLine(`[init] endpoint=${config.endpoint}`);
+  output.appendLine(`${ts()} [init] endpoint=${config.endpoint}`);
 
   const client = new ApproverStream(
     config.endpoint,
     () => resolveToken(config),
     {
       onSnapshot: (frame: SnapshotFrame): void =>
-        output.appendLine(`[snapshot] ${frame.requests.length} pending`),
+        output.appendLine(`${ts()} [snapshot] ${frame.requests.length} pending`),
       onAdded: (request: EgressRequest): void =>
         output.appendLine(
-          `[added] ${request.id} ${request.metadata.method} ${request.metadata.url || request.metadata.host}`,
+          `${ts()} [added] ${request.id} ${request.metadata.method} ${request.metadata.url || request.metadata.host}`,
         ),
       onResolved: (frame: ResolvedFrame): void =>
-        output.appendLine(`[resolved] ${frame.id} ${frame.status}`),
+        output.appendLine(`${ts()} [resolved] ${frame.id} ${frame.status}`),
       onStatus: (status: string): void =>
-        output.appendLine(`[status] ${status}`),
+        output.appendLine(`${ts()} [status] ${status}`),
     },
   );
   stream = client;
@@ -41,7 +46,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("egressApprover.reconnect", (): void => {
-      output.appendLine("[command] reconnect");
+      output.appendLine(`${ts()} [command] reconnect`);
       client.stop();
       client.start();
     }),
