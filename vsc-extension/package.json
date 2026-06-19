@@ -53,7 +53,7 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "package": "npx @vscode/vsce package --no-dependencies --allow-missing-repository",
+    "package": "pnpm dlx @vscode/vsce package --no-dependencies --allow-missing-repository",
     "vscode:prepublish": "node esbuild.mjs --production",
     "typecheck": "tsc --noEmit"
   },
