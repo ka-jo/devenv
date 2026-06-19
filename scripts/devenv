@@ -8,23 +8,43 @@ cmd_update() {
 }
 
 cmd_install_extension() {
+    local skip_build=0
+    while [[ "${1:-}" == --* ]]; do
+        case "$1" in
+            --skip-build) skip_build=1; shift ;;
+            *) echo "unknown option: $1"; exit 1 ;;
+        esac
+    done
+
+    run_quiet() {
+        local out code
+        out="$("$@" 2>&1)" || { code=$?; echo "$out" >&2; exit $code; }
+    }
+
+    if [[ "$skip_build" -eq 0 ]]; then
+        echo "building extension..."
+        run_quiet pnpm --dir "$REPO_DIR/vsc-extension" run package
+    fi
+
     local vsix
     vsix="$(ls "$REPO_DIR/vsc-extension/"*.vsix 2>/dev/null | head -1)"
     if [[ -z "$vsix" ]]; then
-        echo "error: no .vsix found in vsc-extension/ — run 'pnpm run package' first"
+        echo "error: no .vsix found in vsc-extension/"
         exit 1
     fi
 
     local win_temp
-    win_temp="$(powershell.exe -c '$env:TEMP' | tr -d '\r')"
+    win_temp="$(wslvar TEMP | tr -d '\r')"
     local dest="$win_temp\\egress-approver.vsix"
     local dest_wsl
     dest_wsl="$(wslpath "$dest")"
 
-    cp "$vsix" "$dest_wsl"
+    run_quiet cp "$vsix" "$dest_wsl"
     echo "copied: $vsix → $dest"
 
-    powershell.exe -c "code --install-extension '$dest'"
+    echo "installing extension..."
+    run_quiet powershell.exe -NonInteractive -c "code --install-extension '$dest'"
+    echo "done"
 }
 
 cmd_devcontainer() {
@@ -89,14 +109,14 @@ cmd_devcontainer() {
 case "${1:-}" in
     update)            cmd_update ;;
     devcontainer)      shift; cmd_devcontainer "$@" ;;
-    install-extension) cmd_install_extension ;;
+    install-extension) shift; cmd_install_extension "$@" ;;
     *)
         echo "usage: devenv <command>"
         echo ""
         echo "commands:"
         echo "  update                          pull the latest devenv repo"
         echo "  devcontainer [--name <name>]    copy/update .devcontainer in the current project"
-        echo "  install-extension               install the egress approver VS Code extension on Windows"
+        echo "  install-extension [--skip-build] install the egress approver VS Code extension on Windows"
         exit 1
         ;;
 esac

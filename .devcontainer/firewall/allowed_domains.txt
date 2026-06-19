@@ -6,6 +6,8 @@ platform.claude.com
 .githubusercontent.com
 registry.npmjs.org
 marketplace.visualstudio.com
+main.vscode-cdn.net
+github.gallery.vsassets.io
 vscode.blob.core.windows.net
 update.code.visualstudio.com
 nodejs.org
