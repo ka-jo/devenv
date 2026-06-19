@@ -1,24 +1,31 @@
 /**
- * Egress approval broker. Squid's external_acl helper submits a pending request
- * (POST /pending) and blocks on the response until a human decides. The decision
- * endpoint (POST /decision) is token-gated so that only a caller holding the
- * out-of-band token — i.e. the host-side VS Code extension, never the sandboxed
- * app container — can grant approval. See devcontainer/approver + the plan.
+ * Egress approval broker. Implements the pinned protocol in PROTOCOL.md.
+ *
+ * Squid's external_acl helper submits egress requests via `POST /requests` and blocks
+ * until a terminal verdict is reached. The host-side VS Code extension (Phase 2)
+ * observes pending requests via `GET /requests` (SSE stream or JSON snapshot), issues
+ * verdicts via `PATCH /requests/{id}`, and retrieves the token out-of-band from tmpfs.
+ *
+ * See devcontainer/approver/PROTOCOL.md for the full contract.
  */
 
 import { randomBytes } from "node:crypto";
 import { writeFileSync } from "node:fs";
+import type { BunRequest } from "bun";
+
+/** Reusable encoder for SSE frame serialization. */
+const encoder: TextEncoder = new TextEncoder();
 
 /** @internal */
 const PORT = Number(process.env.APPROVER_PORT) || 3129;
 
 /**
- * Shared secret gating POST /decision. Prefer an explicit `APPROVER_TOKEN` (lets
- * the operator pin one for tests); otherwise mint a fresh 256-bit token per
- * process start. Generating it here — rather than sourcing it from a host file —
- * keeps the secret out of the project tree the sandboxed app container bind-mounts,
- * so a rogue process there can never read it. The host retrieves a generated token
- * out-of-band via `docker compose exec approver cat ${@link TOKEN_FILE}`.
+ * Shared secret gating token-gated endpoints (GET /requests, GET /requests/{id}, PATCH /requests/{id}).
+ * Prefer an explicit `APPROVER_TOKEN` (lets the operator pin one for tests); otherwise mint a
+ * fresh 256-bit token per process start. Generating it here — rather than sourcing it from a
+ * host file — keeps the secret out of the project tree the sandboxed app container bind-mounts,
+ * so a rogue process there can never read it. The host retrieves a generated token out-of-band
+ * via `docker compose exec approver cat ${@link TOKEN_FILE}`.
  */
 const TOKEN = process.env.APPROVER_TOKEN || randomBytes(32).toString("hex");
 
@@ -33,10 +40,10 @@ const TOKEN_FILE = process.env.APPROVER_TOKEN_FILE || "/run/approver/token";
 
 // PHASE 2 (VS Code extension): the host-side decider must read the token from
 // here via `docker compose exec approver cat /run/approver/token` and send it in
-// the `x-approver-token` header on POST /decision. It must NOT expect the token in
-// .devcontainer/.env — that path was removed so the secret stays out of the
-// app container's bind-mounted workspace. Token rotates each container start, so
-// fetch it per session rather than caching across restarts.
+// the `x-approver-token` header on `GET /requests` and `PATCH /requests/{id}`.
+// It must NOT expect the token in .devcontainer/.env — that path was removed so
+// the secret stays out of the app container's bind-mounted workspace. Token
+// rotates each container start, so fetch it per session rather than caching.
 
 if (!process.env.APPROVER_TOKEN) {
   try {
@@ -50,37 +57,65 @@ if (!process.env.APPROVER_TOKEN) {
   }
 }
 
-/** Validated, normalized body of a POST /pending request. */
-interface PendingPayload {
-  /** Trimmed, lowercased hostname the egress request targets. */
+/**
+ * Opaque, proxy-supplied request metadata. Never used as a key; render-only.
+ * The envelope (id, status, createdAt, decidedAt) is stable; metadata evolves.
+ */
+interface RequestMetadata {
+  /** Trimmed, lowercased target hostname. */
   host: string;
-  /** Uppercased HTTP method, or "" when the helper omitted it (logging only). */
+  /** Uppercased HTTP method, or "" when the helper omitted it. */
   method: string;
-  /**
-   * Full request URL, trimmed. Available for plain-HTTP requests; for HTTPS
-   * CONNECT tunnels Squid only knows host:port, so this may be omitted.
-   */
+  /** Full request URL when available (plain HTTP); "" for HTTPS CONNECT tunnels. */
   url: string;
+  /**
+   * The Claude session this egress is attributed to, decoded by the proxy adapter
+   * from the client's Proxy-Authorization token, or "" when untagged (anonymous).
+   * Render-only like all metadata: the approver never keys or gates on it —
+   * per-session policy is an extension concern. See PROTOCOL.md.
+   */
+  sessionId: string;
 }
 
-/** Validated, normalized body of a POST /decision request. */
-interface DecisionPayload {
-  /** The unique request ID assigned by POST /pending. */
-  requestId: string;
-  /** The human's verdict for {@link DecisionPayload.requestId}. */
-  verdict: "allow" | "deny";
+/** Request lifecycle state: pending is non-terminal; the rest are terminal and immutable. */
+type RequestStatus = "pending" | "allowed" | "denied" | "expired";
+
+/**
+ * The one request representation — used in REST JSON bodies, SSE snapshot/added frames,
+ * and client parsers. Byte-identical across all representations.
+ */
+interface EgressRequest {
+  /** UUID correlation key; never derived from request content. */
+  id: string;
+  /** Current lifecycle state. Always "pending" in stream snapshot/added frames. */
+  status: RequestStatus;
+  /** Opaque, proxy-supplied, render-only. The evolving part of the contract. */
+  metadata: RequestMetadata;
+  /** Epoch ms when the request entered pending. */
+  createdAt: number;
+  /** Epoch ms when the request reached a terminal state; present iff status !== "pending". */
+  decidedAt?: number;
+}
+
+/** Payload of a resolved SSE frame. Lean delta: client already has metadata keyed by id. */
+interface ResolvedFrame {
+  /** Unique request ID. */
+  id: string;
+  /** Terminal status: allowed/denied (from PATCH) or expired (system timeout). */
+  status: "allowed" | "denied" | "expired";
+  /** Epoch ms when the request transitioned to terminal state. */
+  decidedAt: number;
 }
 
 /**
- * Read, validate, and normalize a POST /pending body. `host` is required; `method`
- * is optional and coerced leniently since it is informational (logging) only.
+ * Parse and validate a POST /requests body.
+ * `host` is required; `method` and `url` are optional and coerced leniently.
  * @param req The incoming request.
- * @returns A {@link PendingPayload} on success, or a `string` describing the first
- *   problem found (returned, never thrown) for the caller to send back verbatim.
+ * @returns A {@link RequestMetadata} on success, or an error string for the caller to return verbatim.
  */
-async function parsePostPendingPayload(
+async function parseRequestMetadata(
   req: Request,
-): Promise<PendingPayload | string> {
+): Promise<RequestMetadata | string> {
   let body: Record<string, unknown>;
   try {
     body = (await req.json()) as Record<string, unknown>;
@@ -103,19 +138,22 @@ async function parsePostPendingPayload(
   const rawUrl = body.url;
   const url = typeof rawUrl === "string" ? rawUrl.trim() : "";
 
-  return { host, method, url };
+  const rawSessionId = body.sessionId;
+  const sessionId =
+    typeof rawSessionId === "string" ? rawSessionId.trim() : "";
+
+  return { host, method, url, sessionId };
 }
 
 /**
- * Read, validate, and normalize a POST /decision body. `host` and a `verdict` of
- * `"allow"` or `"deny"` (case-insensitive) are both required.
+ * Parse and validate a PATCH /requests/{id} body.
+ * Only "allowed" and "denied" are accepted; "expired" is system-only.
  * @param req The incoming request.
- * @returns A {@link DecisionPayload} on success, or a `string` describing the first
- *   problem found (returned, never thrown) for the caller to send back verbatim.
+ * @returns The terminal status, or an error string.
  */
-async function parsePostDecisionPayload(
+async function parsePatchVerdictBody(
   req: Request,
-): Promise<DecisionPayload | string> {
+): Promise<"allowed" | "denied" | string> {
   let body: Record<string, unknown>;
   try {
     body = (await req.json()) as Record<string, unknown>;
@@ -126,117 +164,374 @@ async function parsePostDecisionPayload(
     return "body must be a json object";
   }
 
-  const rawRequestId = body.requestId;
-  if (typeof rawRequestId !== "string") return "requestId must be a string";
-  const requestId = rawRequestId.trim();
-  if (!requestId) return "requestId required";
-
-  const rawVerdict = body.verdict;
-  const verdict =
-    typeof rawVerdict === "string" ? rawVerdict.trim().toLowerCase() : "";
-  if (verdict !== "allow" && verdict !== "deny") {
-    return "verdict must be 'allow' or 'deny'";
+  const rawStatus = body.status;
+  if (typeof rawStatus !== "string") return "status must be a string";
+  const status = rawStatus.trim().toLowerCase();
+  if (status !== "allowed" && status !== "denied") {
+    return "status must be 'allowed' or 'denied'";
   }
 
-  return { requestId, verdict };
+  return status as "allowed" | "denied";
 }
 
-interface PendingEntry {
-  /** Unique ID assigned at request time; used as the Map key and in decisions. */
-  requestId: string;
-  host: string;
-  method: string;
-  /** Full URL when available (plain HTTP); empty string for HTTPS CONNECT tunnels where Squid only sees host:port. */
-  url: string;
-  firstSeenAt: number;
-  waiters: Set<(verdict: string) => void>;
+/**
+ * In-flight request state. Holds the request envelope, metadata, and waiters.
+ * Waiters are promise resolvers from blocked POST /requests calls awaiting a verdict.
+ */
+interface RequestEntry {
+  /** The immutable envelope. */
+  request: EgressRequest;
+  /** Promise resolvers waiting on this request's terminal state. */
+  waiters: Set<(resolved: EgressRequest) => void>;
 }
 
-const pending = new Map<string, PendingEntry>();
+/** In-process map of all requests (pending + terminal, evicted after resolution). */
+const requests = new Map<string, RequestEntry>();
 
-/** Resolve all blocked helpers waiting on `requestId` with the given verdict. */
-function settle(requestId: string, verdict: string): number {
-  const entry = pending.get(requestId);
-  if (!entry) return 0;
-  pending.delete(requestId);
-  const count = entry.waiters.size;
-  for (const resolve of entry.waiters) resolve(verdict);
-  return count;
+/** Set of SSE stream controllers for broadcasting. Cleaned up on client disconnect. */
+const streamControllers = new Set<
+  ReadableStreamDefaultController<Uint8Array>
+>();
+
+/**
+ * Resolve all blocked helpers and SSE subscribers on a request reaching terminal state.
+ * Updates the request to terminal, removes it from the map, and triggers both waiters
+ * and SSE broadcast.
+ * @param id The request ID.
+ * @param status The new terminal status (allowed/denied/expired).
+ * @returns The terminal {@link EgressRequest}, or undefined if id was unknown.
+ */
+function settle(
+  id: string,
+  status: "allowed" | "denied" | "expired",
+): EgressRequest | undefined {
+  const entry = requests.get(id);
+  if (!entry) return undefined;
+
+  const decidedAt = Date.now();
+  entry.request.status = status;
+  entry.request.decidedAt = decidedAt;
+
+  requests.delete(id);
+
+  // Resolve all blocked POST /requests callers.
+  const resolved = entry.request;
+  for (const waiter of entry.waiters) waiter(resolved);
+  entry.waiters.clear();
+
+  // Broadcast to all SSE subscribers.
+  const frame: ResolvedFrame = { id, status, decidedAt };
+  broadcastResolved(frame);
+
+  return resolved;
 }
 
-async function postPending(req: Request): Promise<Response> {
-  const body = await parsePostPendingPayload(req);
+/**
+ * Safely encode and send an SSE frame to a stream controller.
+ * If the controller's connection is dead (enqueue throws), removes it from
+ * streamControllers and suppresses the error to allow broadcasting to continue.
+ * @param controller The stream controller to write to.
+ * @param event The event type.
+ * @param data The JSON data payload.
+ */
+function emitSseFrame(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  event: string,
+  data: unknown,
+): void {
+  const encoded: Uint8Array = encoder.encode(
+    `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
+  );
+  try {
+    controller.enqueue(encoded);
+  } catch {
+    // Client disconnected; remove from broadcasters and continue.
+    streamControllers.delete(controller);
+  }
+}
+
+/**
+ * Safely emit a raw SSE keepalive comment to a stream controller.
+ * If the controller's connection is dead, removes it from streamControllers
+ * and suppresses the error.
+ * @param controller The stream controller to write to.
+ */
+function emitSseKeepalive(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+): void {
+  const keepaliveEncoded: Uint8Array = encoder.encode(": keepalive\n\n");
+  try {
+    controller.enqueue(keepaliveEncoded);
+  } catch {
+    // Client disconnected; remove from broadcasters and continue.
+    streamControllers.delete(controller);
+  }
+}
+
+/**
+ * Send a resolved frame (lean delta) to all connected SSE subscribers.
+ * If a subscriber's connection is dead, silently removes it and continues.
+ * @param frame The resolved frame data.
+ */
+function broadcastResolved(frame: ResolvedFrame): void {
+  for (const controller of streamControllers) {
+    emitSseFrame(controller, "resolved", frame);
+  }
+}
+
+/**
+ * Send an added frame to all connected SSE subscribers.
+ * If a subscriber's connection is dead, silently removes it and continues.
+ * @param request The newly-created pending request.
+ */
+function broadcastAdded(request: EgressRequest): void {
+  for (const controller of streamControllers) {
+    emitSseFrame(controller, "added", request);
+  }
+}
+
+/**
+ * Get all requests filtered by optional status. Used for snapshots and the
+ * JSON response of GET /requests.
+ * @param filterStatus Optional status filter; if present, only that status is included.
+ * @returns Array of requests matching the filter.
+ */
+function getRequestsSnapshot(filterStatus?: RequestStatus): EgressRequest[] {
+  const results: EgressRequest[] = [];
+  for (const entry of requests.values()) {
+    if (!filterStatus || entry.request.status === filterStatus) {
+      results.push(entry.request);
+    }
+  }
+  return results;
+}
+
+/**
+ * POST /requests — create and await verdict.
+ * The proxy helper's sole call. Always blocks until the request reaches a terminal state.
+ * Returns the terminal EgressRequest on success, or 400 on malformed body.
+ * If the client aborts before a verdict lands, the request transitions to expired.
+ */
+async function postRequests(req: Request): Promise<Response> {
+  const body = await parseRequestMetadata(req);
   if (typeof body === "string") {
     return Response.json({ error: body }, { status: 400 });
   }
-  const { host, method, url } = body;
+  const metadata = body;
 
-  const requestId = crypto.randomUUID();
-  const entry: PendingEntry = {
-    requestId,
-    host,
-    method,
-    url,
-    firstSeenAt: Date.now(),
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  const request: EgressRequest = {
+    id,
+    status: "pending",
+    metadata,
+    createdAt: now,
+  };
+  const entry: RequestEntry = {
+    request,
     waiters: new Set(),
   };
-  pending.set(requestId, entry);
-  console.log(`[pending] ${requestId} ${method} ${url || host}`);
+  requests.set(id, entry);
+  console.log(
+    `[request] ${id} [${metadata.sessionId || "anon"}] ${metadata.method} ${metadata.url || metadata.host}`,
+  );
+
+  // Broadcast to all SSE subscribers.
+  broadcastAdded(request);
 
   return new Promise<Response>((resolve) => {
-    const waiter = (verdict: string) =>
-      resolve(Response.json({ requestId, verdict }));
+    const waiter = (terminal: EgressRequest) =>
+      resolve(Response.json(terminal));
     entry.waiters.add(waiter);
 
-    // Drop this waiter if the helper hangs up (its curl timed out → fail-closed).
+    // If the helper hangs up (its curl timed out), transition to expired and settle.
     req.signal.addEventListener("abort", () => {
       entry.waiters.delete(waiter);
-      if (entry.waiters.size === 0) pending.delete(requestId);
+      // If no more waiters, mark as expired and broadcast. Otherwise, other waiters
+      // are still blocked; let them finish.
+      if (entry.waiters.size === 0) {
+        const expired = settle(id, "expired");
+        if (expired) {
+          console.log(`[expired] ${id} (client abort)`);
+        }
+      }
     });
   });
 }
 
-function getPending(): Response {
-  const list = [...pending.values()].map((e) => ({
-    requestId: e.requestId,
-    host: e.host,
-    method: e.method,
-    url: e.url,
-    firstSeenAt: e.firstSeenAt,
-    waiting: e.waiters.size,
-  }));
-  return Response.json({ pending: list });
+/**
+ * Validate whether a string is a known request status.
+ * @param value The value to check.
+ * @returns true if value is a known status, false otherwise.
+ */
+function isKnownStatus(value: unknown): value is RequestStatus {
+  return (
+    value === "pending" ||
+    value === "allowed" ||
+    value === "denied" ||
+    value === "expired"
+  );
 }
 
-async function postDecision(req: Request): Promise<Response> {
+/**
+ * GET /requests — list (snapshot) or stream.
+ * Token-gated. Content-negotiated on Accept header:
+ * - application/json (default): snapshot with optional ?status filter.
+ * - text/event-stream: live SSE stream with snapshot, added, resolved frames.
+ * Returns 400 if ?status is present but invalid.
+ */
+function getRequests(req: Request): Response {
+  const accept = req.headers.get("accept") || "application/json";
+
+  if (accept.includes("text/event-stream")) {
+    return handleGetRequestsSSE();
+  }
+
+  // JSON snapshot.
+  const url = new URL(req.url);
+  const statusParam: string | null = url.searchParams.get("status");
+
+  let filterStatus: RequestStatus | undefined;
+  if (statusParam !== null) {
+    if (!isKnownStatus(statusParam)) {
+      return Response.json({ error: "invalid status filter" }, { status: 400 });
+    }
+    filterStatus = statusParam;
+  }
+
+  const snapshot = getRequestsSnapshot(filterStatus);
+  return Response.json({ requests: snapshot });
+}
+
+/**
+ * Handle GET /requests with Accept: text/event-stream.
+ * Emits a snapshot frame, registers the controller for broadcasts, and emits
+ * keepalives every ~20s until the client disconnects. If a keepalive fails
+ * (client disconnected), clears the interval and removes the controller.
+ */
+function handleGetRequestsSSE(): Response {
+  let keepaliveInterval: Timer | null = null;
+  let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+
+  const body = new ReadableStream<Uint8Array>({
+    start(ctrl: ReadableStreamDefaultController<Uint8Array>): void {
+      controller = ctrl;
+      // Snapshot and register atomically: no await between.
+      const snapshot = getRequestsSnapshot();
+      emitSseFrame(ctrl, "snapshot", { requests: snapshot });
+      streamControllers.add(ctrl);
+
+      // Keepalive every ~20s.
+      keepaliveInterval = setInterval(() => {
+        if (ctrl) {
+          emitSseKeepalive(ctrl);
+        }
+      }, 20_000);
+    },
+
+    cancel(): void {
+      // Client disconnected; clean up.
+      if (keepaliveInterval) clearInterval(keepaliveInterval);
+      if (controller) streamControllers.delete(controller);
+    },
+  });
+
+  return new Response(body, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    },
+  });
+}
+
+/**
+ * GET /requests/{id} — fetch a single request.
+ * Token-gated. Returns 200 with the EgressRequest, or 404 if unknown.
+ * @param req The incoming request with params.id populated by Bun's router.
+ * @returns A Response with the request data or a 404 error.
+ */
+function getRequest(req: BunRequest<"/requests/:id">): Response {
+  const id = req.params.id;
+  const entry = requests.get(id);
+  if (!entry) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+  return Response.json(entry.request);
+}
+
+/**
+ * PATCH /requests/{id} — issue a verdict.
+ * Token-gated. Only "allowed" and "denied" are accepted; "expired" is system-only.
+ * Returns 200 with the terminal EgressRequest, or 400/404/409 per protocol.
+ * @param req The incoming request with params.id populated by Bun's router.
+ * @returns A Response with the terminal request or an error.
+ */
+async function patchRequest(
+  req: BunRequest<"/requests/:id">,
+): Promise<Response> {
+  const id = req.params.id;
+  const entry = requests.get(id);
+  if (!entry) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+
+  // Refuse to transition out of terminal states.
+  if (entry.request.status !== "pending") {
+    return Response.json({ error: "already terminal" }, { status: 409 });
+  }
+
+  const body = await parsePatchVerdictBody(req);
+  if (typeof body === "string") {
+    return Response.json({ error: body }, { status: 400 });
+  }
+  const status = body;
+
+  const terminal = settle(id, status);
+  console.log(`[verdict] ${status} ${id}`);
+
+  return Response.json(terminal);
+}
+
+/**
+ * Auth helper: reject with 401 if x-approver-token !== TOKEN.
+ * Used by token-gated endpoints: GET /requests, GET /requests/{id}, PATCH /requests/{id}.
+ */
+function requireToken(req: Request): Response | null {
   const token = req.headers.get("x-approver-token");
   if (token !== TOKEN) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
-  const body = await parsePostDecisionPayload(req);
-  if (typeof body === "string") {
-    return Response.json({ error: body }, { status: 400 });
-  }
-  const { requestId, verdict } = body;
-  const resolved = settle(requestId, verdict);
-  if (resolved === 0) {
-    return Response.json({ error: "unknown requestId" }, { status: 404 });
-  }
-  console.log(`[decision] ${verdict} ${requestId} (resolved ${resolved})`);
-  return Response.json({ requestId, verdict, resolved });
+  return null;
 }
 
 Bun.serve({
   port: PORT,
   maxRequestBodySize: 64 * 1024,
+  // SSE streams must never be closed by an idle timeout; disable it globally.
+  // POST /requests already relies on abort signals for expiry, not HTTP timeouts.
+  idleTimeout: 0,
   routes: {
     "/health": new Response("OK"),
-    "/pending": {
-      GET: getPending,
-      POST: postPending,
+    "/requests": {
+      POST: postRequests,
+      GET: (req: Request): Response => {
+        const authErr = requireToken(req);
+        if (authErr) return authErr;
+        return getRequests(req);
+      },
     },
-    "/decision": {
-      POST: postDecision,
+    "/requests/:id": {
+      GET: (req: BunRequest<"/requests/:id">): Response => {
+        const authErr = requireToken(req);
+        if (authErr) return authErr;
+        return getRequest(req);
+      },
+      PATCH: async (req: BunRequest<"/requests/:id">): Promise<Response> => {
+        const authErr = requireToken(req);
+        if (authErr) return authErr;
+        return patchRequest(req);
+      },
     },
     "/*": new Response("not found", { status: 404 }),
   },
