@@ -37,3 +37,23 @@ RUN curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=11.4.0 sh -
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
 RUN echo 'eval "$(fnm env --use-on-cd --shell zsh)"' >> /home/ka-jo/.zshrc
+
+# Per-session egress attribution. Wrap `claude` so each launch mints a fresh token
+# and embeds it as the Basic-auth username in the egress proxy URL. Every child
+# process (Bash tool, curl, git, the API calls themselves) inherits the credentialed
+# proxy via env, so the firewall's approver can decode the token from the
+# Proxy-Authorization header and attribute the request to this session. The proxy
+# host must match HTTP_PROXY in docker-compose.yml (firewall:3128). Running `claude`
+# outside this function falls back to the credential-less compose proxy (anonymous).
+# Attribution only — a process can forge or drop the token; not a security boundary.
+RUN cat >> /home/ka-jo/.zshrc <<'ZSHRC'
+
+claude() {
+  local token proxy
+  token="$(</proc/sys/kernel/random/uuid)"
+  proxy="http://${token}:x@firewall:3128"
+  HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" \
+  http_proxy="$proxy" https_proxy="$proxy" \
+    command claude "$@"
+}
+ZSHRC
