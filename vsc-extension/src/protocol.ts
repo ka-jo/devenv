@@ -22,6 +22,11 @@ export interface RequestMetadata {
   method: string;
   /** Full request URL when available (plain HTTP); "" for HTTPS CONNECT tunnels. */
   url: string;
+  /**
+   * Claude session id decoded from the Proxy-Authorization token, or "" when
+   * untagged (anonymous). Render-only — the approver never gates on this field.
+   */
+  sessionId: string;
 }
 
 /** The one request representation — identical across REST bodies and stream frames. */

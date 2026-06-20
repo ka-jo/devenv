@@ -27,8 +27,44 @@
       {
         "command": "egressApprover.showLog",
         "title": "Egress Approver: Show Log"
+      },
+      {
+        "command": "egressApprover.allowRequest",
+        "title": "Allow",
+        "icon": "$(check)"
+      },
+      {
+        "command": "egressApprover.denyRequest",
+        "title": "Deny",
+        "icon": "$(close)"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "id": "egressApprover.requests",
+          "name": "Egress Requests"
+        }
+      ]
+    },
+    "menus": {
+      "commandPalette": [
+        { "command": "egressApprover.allowRequest", "when": "false" },
+        { "command": "egressApprover.denyRequest", "when": "false" }
+      ],
+      "view/item/context": [
+        {
+          "command": "egressApprover.allowRequest",
+          "when": "view == egressApprover.requests && viewItem == pendingRequest",
+          "group": "inline@1"
+        },
+        {
+          "command": "egressApprover.denyRequest",
+          "when": "view == egressApprover.requests && viewItem == pendingRequest",
+          "group": "inline@2"
+        }
+      ]
+    },
     "configuration": {
       "title": "Egress Approver",
       "properties": {
