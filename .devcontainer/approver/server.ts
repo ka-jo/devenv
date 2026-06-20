@@ -149,11 +149,11 @@ async function parseRequestMetadata(
  * Parse and validate a PATCH /requests/{id} body.
  * Only "allowed" and "denied" are accepted; "expired" is system-only.
  * @param req The incoming request.
- * @returns The terminal status, or an error string.
+ * @returns An object with the terminal status on success, or an error string.
  */
 async function parsePatchVerdictBody(
   req: Request,
-): Promise<"allowed" | "denied" | string> {
+): Promise<{ status: "allowed" | "denied" } | string> {
   let body: Record<string, unknown>;
   try {
     body = (await req.json()) as Record<string, unknown>;
@@ -171,7 +171,7 @@ async function parsePatchVerdictBody(
     return "status must be 'allowed' or 'denied'";
   }
 
-  return status as "allowed" | "denied";
+  return { status: status as "allowed" | "denied" };
 }
 
 /**
@@ -485,7 +485,7 @@ async function patchRequest(
   if (typeof body === "string") {
     return Response.json({ error: body }, { status: 400 });
   }
-  const status = body;
+  const { status } = body;
 
   const terminal = settle(id, status);
   console.log(`[verdict] ${status} ${id}`);
@@ -508,9 +508,6 @@ function requireToken(req: Request): Response | null {
 Bun.serve({
   port: PORT,
   maxRequestBodySize: 64 * 1024,
-  // SSE streams must never be closed by an idle timeout; disable it globally.
-  // POST /requests already relies on abort signals for expiry, not HTTP timeouts.
-  idleTimeout: 0,
   routes: {
     "/health": new Response("OK"),
     "/requests": {

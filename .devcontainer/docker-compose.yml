@@ -3,7 +3,7 @@ services:
   # requests here and blocks; a human approves/denies via the token-gated
   # /decision endpoint (host-side only — the token is never in the app container).
   approver:
-    container_name: devenv-approver
+    container_name: __name__-approver
     build:
       context: approver
       dockerfile: Dockerfile
@@ -43,12 +43,13 @@ services:
       start_period: 2s
 
   firewall:
-    container_name: devenv-firewall
+    container_name: __name__-firewall
     build:
       context: firewall
       dockerfile: Dockerfile
     volumes:
       - ./firewall/allowed_domains.txt:/etc/squid/allowed_domains.txt:ro
+      - ./firewall/denied_domains.txt:/etc/squid/denied_domains.txt:ro
     # `external` = real internet egress + the path to the approver; `proxy_net` =
     # the internal-only segment shared with the app container (which reaches Squid
     # here but, having no other network, can reach nothing else directly).
@@ -68,7 +69,7 @@ services:
       start_period: 2s
 
   devcontainer:
-    container_name: devenv-devcontainer
+    container_name: __name__-devcontainer
     build:
       dockerfile: Dockerfile
     command: sleep infinity
