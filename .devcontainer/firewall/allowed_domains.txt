@@ -9,3 +9,12 @@ marketplace.visualstudio.com
 vscode.blob.core.windows.net
 update.code.visualstudio.com
 nodejs.org
+api.individual.githubcopilot.com
+main.vscode-cdn.net
+anthropic.gallery.vsassets.io
+vitest.gallery.vsassets.io
+editorconfig.gallery.vsassets.io
+vue.gallery.vsassets.io
+oxc.gallery.vsassets.io
+usernamehw.gallery.vsassets.io
+ms-dotnettools.gallery.vsassets.io

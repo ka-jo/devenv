@@ -1,3 +1,8 @@
 # Deny list — domains blocked before the approval flow.
 # One entry per line. Leading "." matches all subdomains (e.g. .example.com blocks sub.example.com).
 # Edit from the host; the firewall sidecar live-reloads on change.
+default.exp-tas.com
+mobile.events.data.microsoft.com
+telemetry.individual.githubcopilot.com
+proxy.individual.githubcopilot.com
+westus2-0.in.applicationinsights.azure.com
