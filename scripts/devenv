@@ -50,7 +50,7 @@ cmd_install_extension() {
 cmd_devcontainer() {
     local SRC_DIR="$REPO_DIR/devcontainer"
     local DEST_DIR="$(pwd)/.devcontainer"
-    local PRESERVE=(allowed_domains.txt devcontainer.json)
+    local PRESERVE=(allowed_domains.txt denied_domains.txt devcontainer.json)
     local EXCLUDE=(
         '*/node_modules/*'
         '*/bun.lock'
