@@ -19,13 +19,13 @@ const TOKEN_PATH = "/run/approver/token";
  *
  * @param config The resolved extension configuration.
  * @returns The trimmed token string.
- * @throws {Error} If the approver container cannot be found.
+ * @throws {Error} If no `containerName` is configured (and no token is pinned).
  * @throws {Error} If `docker exec` fails or returns an empty token.
  */
 export async function resolveToken(config: ApproverConfig): Promise<string> {
   if (config.token) return config.token;
 
-  const containerId = await findApproverContainer(config.containerName);
+  const containerId = findApproverContainer(config.containerName);
 
   try {
     const { stdout } = await execFileAsync("docker", [
@@ -45,36 +45,25 @@ export async function resolveToken(config: ApproverConfig): Promise<string> {
 }
 
 /**
- * Locate the running approver container.
+ * Resolve the approver container name for token retrieval.
  *
- * Uses the explicit container name when provided (injected into workspace
- * settings by `devenv devcontainer` via the `egressApprover.containerName`
- * setting in `devcontainer.json`). Falls back to querying Docker for the first
- * running container with `com.docker.compose.service=approver`; this handles
- * dev setups not bootstrapped by `devenv devcontainer`, but is ambiguous when
- * multiple devcontainers with an approver service are running simultaneously —
- * set `egressApprover.containerName` explicitly in that case.
+ * The name is the one `devenv devcontainer` injects into the dev container's
+ * workspace settings (`egressApprover.containerName` in `devcontainer.json`),
+ * which scopes each VS Code window to its own approver. There is deliberately
+ * no `docker ps` auto-discovery fallback: first-match discovery would attach a
+ * window to an arbitrary approver and is what caused requests to fan out across
+ * unrelated windows. Callers gate on `containerName`/`token` being present
+ * before reaching here, so an empty name is a programming error.
  *
- * @param containerName Optional explicit container name or ID override.
+ * @param containerName The explicit container name or ID.
  * @returns The container name to pass to `docker exec`.
- * @throws {Error} If no running approver container can be found.
+ * @throws {Error} If `containerName` is empty.
  */
-async function findApproverContainer(containerName: string): Promise<string> {
-  if (containerName) return containerName;
-
-  const { stdout } = await execFileAsync("docker", [
-    "ps",
-    "--filter",
-    "label=com.docker.compose.service=approver",
-    "--format",
-    "{{.Names}}",
-  ]);
-
-  const name = stdout.trim().split("\n")[0]?.trim();
-  if (!name) {
+function findApproverContainer(containerName: string): string {
+  if (!containerName) {
     throw new Error(
-      "no running approver container found; set egressApprover.containerName or egressApprover.token",
+      "egressApprover.containerName is required to retrieve the token; set it or pin egressApprover.token",
     );
   }
-  return name;
+  return containerName;
 }

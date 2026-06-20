@@ -22,6 +22,23 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(output);
 
   const config = readConfig();
+
+  // Stay dormant unless this window is a devenv dev container. `devenv
+  // devcontainer` injects `egressApprover.containerName` into the dev
+  // container's workspace settings, so its presence is how a host-side UI
+  // extension instance tells "I'm the window attached to an approver-backed
+  // container" from "I'm a plain host window." A pinned `token` is the dev
+  // escape hatch (fixed endpoint, no container discovery). Without either,
+  // do nothing: no stream, no docker shell-outs, no errors about a container
+  // that doesn't exist. This is what scopes prompts to the right window —
+  // every other window simply never connects.
+  if (!config.containerName && !config.token) {
+    output.appendLine(
+      `${ts()} [init] no egressApprover.containerName/token — dormant (not a dev container window)`,
+    );
+    return;
+  }
+
   output.appendLine(`${ts()} [init] endpoint=${config.endpoint}`);
 
   const client = new ApproverStream(
