@@ -101,6 +101,7 @@ Therefore:
 | Create a request | proxy helper | **none** — gated by network segmentation; the helper can't hold the host token and doesn't need to |
 | Read requests (list / stream / fetch) | extension | **token** |
 | Issue a verdict | extension | **token** |
+| Append to a domain list | extension | **token** |
 
 The token is the per-start secret minted by the approver and written to its tmpfs
 (`/run/approver/token`); the extension retrieves it out-of-band
@@ -172,6 +173,26 @@ A human verdict, modeled as a state transition on the request — **not** a sepa
 - **`401`:** missing/invalid token.
 - **`404`:** unknown `id`.
 - **`409 Conflict`:** the request is already terminal (verdicts are immutable).
+
+### `POST /domains/{kind}` — append to a domain list
+
+Adds a host to the named firewall domain list (`allowed` or `denied`). The
+approver holds **writable** bind mounts of both files; this endpoint exists
+because the VS Code extension runs on the Windows host and cannot write WSL
+filesystem paths directly.
+
+- **Auth:** token.
+- **`kind`:** `allowed` | `denied`.
+- **Request body:** `{ "host": "<bare hostname>" }`.
+- **Response `200 OK`:** `{ "added": true }` when written, or
+  `{ "added": false, "reason": "already present" }` when the host was already
+  in the list (idempotent — not an error).
+- **Response `400`:** malformed body or unknown `kind`.
+- **Response `401`:** missing/invalid token.
+- **Side effect:** if the file does not yet exist (project predates the template
+  adding it), it is created with a standard header comment before the entry is
+  appended. The firewall sidecar's inotify watch fires on the shared host inode
+  and SIGHUPs Squid, so the change is live immediately.
 
 ### `GET /health` — liveness
 

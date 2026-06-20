@@ -2,14 +2,16 @@
  * Egress approval broker. Implements the pinned protocol in PROTOCOL.md.
  *
  * Squid's external_acl helper submits egress requests via `POST /requests` and blocks
- * until a terminal verdict is reached. The host-side VS Code extension (Phase 2)
- * observes pending requests via `GET /requests` (SSE stream or JSON snapshot), issues
- * verdicts via `PATCH /requests/{id}`, and retrieves the token out-of-band from tmpfs.
+ * until a terminal verdict is reached. The host-side VS Code extension observes pending
+ * requests via `GET /requests` (SSE stream or JSON snapshot), issues verdicts via
+ * `PATCH /requests/{id}`, appends to domain lists via `POST /domains/{kind}`, and
+ * retrieves the token out-of-band from tmpfs.
  *
  * See devcontainer/approver/PROTOCOL.md for the full contract.
  */
 
 import { randomBytes } from "node:crypto";
+import { readFile, writeFile } from "node:fs/promises";
 import { writeFileSync } from "node:fs";
 import type { BunRequest } from "bun";
 
@@ -18,6 +20,35 @@ const encoder: TextEncoder = new TextEncoder();
 
 /** @internal */
 const PORT = Number(process.env.APPROVER_PORT) || 3129;
+
+/**
+ * Absolute paths to the two domain list files, bind-mounted from the host's
+ * `.devcontainer/firewall/` directory. The firewall container holds the same
+ * host inodes read-only; inotify there fires when the approver writes here.
+ * @internal
+ */
+const DOMAIN_LIST_PATHS: Record<"allowed" | "denied", string> = {
+  allowed:
+    process.env.ALLOWED_DOMAINS_FILE ?? "/etc/approver/allowed_domains.txt",
+  denied:
+    process.env.DENIED_DOMAINS_FILE ?? "/etc/approver/denied_domains.txt",
+};
+
+/**
+ * Header prepended when bootstrapping a domain list file that does not yet exist.
+ * Mirrors the header written by `devenv devcontainer` for each list type.
+ * @internal
+ */
+const DOMAIN_LIST_HEADERS: Record<"allowed" | "denied", string> = {
+  allowed:
+    "# Allow list — domains permitted through the egress firewall.\n" +
+    "# One entry per line. Leading \".\" matches all subdomains (e.g. .example.com allows sub.example.com).\n" +
+    "# Edit from the host; the firewall sidecar live-reloads on change.\n",
+  denied:
+    "# Deny list — domains blocked before the approval flow.\n" +
+    "# One entry per line. Leading \".\" matches all subdomains (e.g. .example.com blocks sub.example.com).\n" +
+    "# Edit from the host; the firewall sidecar live-reloads on change.\n",
+};
 
 /**
  * Shared secret gating token-gated endpoints (GET /requests, GET /requests/{id}, PATCH /requests/{id}).
@@ -494,6 +525,72 @@ async function patchRequest(
 }
 
 /**
+ * POST /domains/{kind} — append a host to a firewall domain list.
+ * Token-gated. Idempotent: returns `200` even if the host is already present.
+ * Creates the file with a standard header if it does not yet exist (handles
+ * projects set up before the denied list was added to the template).
+ *
+ * @param req The incoming request with params.kind populated by Bun's router.
+ * @returns 200 on success, 400 on bad input, 401 on bad token.
+ */
+async function postDomainEntry(
+  req: BunRequest<"/domains/:kind">,
+): Promise<Response> {
+  const kind = req.params.kind;
+  if (kind !== "allowed" && kind !== "denied") {
+    return Response.json(
+      { error: "kind must be 'allowed' or 'denied'" },
+      { status: 400 },
+    );
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await req.json()) as Record<string, unknown>;
+  } catch {
+    return Response.json({ error: "invalid json" }, { status: 400 });
+  }
+  if (typeof body !== "object" || body === null) {
+    return Response.json({ error: "body must be a json object" }, { status: 400 });
+  }
+
+  const rawHost = body.host;
+  if (typeof rawHost !== "string") {
+    return Response.json({ error: "host must be a string" }, { status: 400 });
+  }
+  const host = rawHost.trim().toLowerCase();
+  if (!host) {
+    return Response.json({ error: "host required" }, { status: 400 });
+  }
+
+  const filePath = DOMAIN_LIST_PATHS[kind];
+
+  let content: string;
+  try {
+    content = await readFile(filePath, "utf8");
+  } catch {
+    // File doesn't exist yet (project predates this list being added to the template).
+    // Bootstrap it with the standard header so the firewall sidecar can parse it.
+    content = DOMAIN_LIST_HEADERS[kind];
+    console.log(`[domain-list] created ${filePath}`);
+  }
+
+  const lines = content.split("\n");
+  if (lines.some((l) => l.trim() === host)) {
+    return Response.json({ added: false, reason: "already present" });
+  }
+
+  const updated = content.endsWith("\n")
+    ? `${content}${host}\n`
+    : `${content}\n${host}\n`;
+
+  await writeFile(filePath, updated, "utf8");
+  console.log(`[domain-list] ${kind} ← ${host}`);
+
+  return Response.json({ added: true });
+}
+
+/**
  * Auth helper: reject with 401 if x-approver-token !== TOKEN.
  * Used by token-gated endpoints: GET /requests, GET /requests/{id}, PATCH /requests/{id}.
  */
@@ -528,6 +625,13 @@ Bun.serve({
         const authErr = requireToken(req);
         if (authErr) return authErr;
         return patchRequest(req);
+      },
+    },
+    "/domains/:kind": {
+      POST: async (req: BunRequest<"/domains/:kind">): Promise<Response> => {
+        const authErr = requireToken(req);
+        if (authErr) return authErr;
+        return postDomainEntry(req);
       },
     },
     "/*": new Response("not found", { status: 404 }),
