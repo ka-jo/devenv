@@ -57,4 +57,46 @@ else
     echo "linked: $DEVENV_BIN -> $REPO_DIR/scripts/devenv"
 fi
 
+# Ensure jq is available for JSON surgery on VS Code settings below.
+if ! command -v jq > /dev/null 2>&1; then
+    echo "installing jq..."
+    sudo apt-get install -y jq
+fi
+
+# VS Code: register devcontainer-configs/ as a repository configuration path so
+# per-project devcontainer setups can live in ~/devenv without being committed to
+# project repos. VS Code derives the lookup path from `git remote -v`; place
+# configs at devcontainer-configs/github.com/<user>/<repo>/.devcontainer/.
+CONFIGS_DIR="$REPO_DIR/devcontainer-configs"
+mkdir -p "$CONFIGS_DIR"
+
+APPDATA=$(cmd.exe /c "echo %APPDATA%" 2>/dev/null | tr -d '\r\n')
+if [ -z "$APPDATA" ]; then
+    echo "warning: could not detect Windows APPDATA; skipping VS Code settings" >&2
+    echo "         add this manually to VS Code user settings:" >&2
+    echo "         \"dev.containers.repositoryConfigurationPaths\": [\"<path to devenv>/devcontainer-configs\"]" >&2
+else
+    VSCODE_SETTINGS=$(wslpath "$APPDATA/Code/User/settings.json")
+    WIN_CONFIGS_DIR=$(wslpath -w "$CONFIGS_DIR")
+
+    if [ ! -f "$VSCODE_SETTINGS" ]; then
+        echo '{}' > "$VSCODE_SETTINGS"
+    fi
+
+    if ! jq . "$VSCODE_SETTINGS" > /dev/null 2>&1; then
+        echo "warning: $VSCODE_SETTINGS is not valid JSON (may contain comments); skipping" >&2
+        echo "         add this manually to VS Code user settings:" >&2
+        echo "         \"dev.containers.repositoryConfigurationPaths\": [\"$WIN_CONFIGS_DIR\"]" >&2
+    elif jq -e --arg p "$WIN_CONFIGS_DIR" \
+            '.["dev.containers.repositoryConfigurationPaths"] | arrays | contains([$p])' \
+            "$VSCODE_SETTINGS" > /dev/null 2>&1; then
+        echo "ok: VS Code repositoryConfigurationPaths"
+    else
+        jq --arg p "$WIN_CONFIGS_DIR" \
+            '.["dev.containers.repositoryConfigurationPaths"] = ((.["dev.containers.repositoryConfigurationPaths"] // []) + [$p] | unique)' \
+            "$VSCODE_SETTINGS" > "$VSCODE_SETTINGS.tmp" && mv "$VSCODE_SETTINGS.tmp" "$VSCODE_SETTINGS"
+        echo "updated: VS Code repositoryConfigurationPaths += $WIN_CONFIGS_DIR"
+    fi
+fi
+
 echo "done."
