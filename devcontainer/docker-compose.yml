@@ -30,8 +30,12 @@ services:
     # reaches it over `external`; the host reaches it via the published port.
     # (Port publishing requires a non-internal bridge, so `external` is also why
     # the approver has outbound internet — acceptable: it never initiates egress.)
+    # The host port is left ephemeral (no fixed left-hand side) so multiple dev
+    # container stacks can run concurrently without colliding on a single port;
+    # the VS Code extension discovers the assigned port per-container via
+    # `docker port <name> 3129/tcp`. Stays pinned to 127.0.0.1 (loopback only).
     ports:
-      - "127.0.0.1:3129:3129"
+      - "127.0.0.1::3129"
     networks:
       - external
     restart: unless-stopped

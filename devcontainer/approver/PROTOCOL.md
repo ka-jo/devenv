@@ -10,7 +10,8 @@ The contract between the three parties in the egress-approval system:
   process memory and brokers verdicts.
 - **Extension** — the host-side VS Code extension (Phase 2). Observes pending
   requests and issues human verdicts. Reaches the approver over the host loopback
-  publish (`127.0.0.1:3129`).
+  publish on `127.0.0.1`; the host port is ephemeral (so concurrent stacks don't
+  collide) and discovered per-window via `docker port <containerName> 3129/tcp`.
 
 This document is the pinned contract; the approver refactor and the extension build
 against it. It supersedes the Phase 1 surface (`POST /pending`, `GET /pending`,
