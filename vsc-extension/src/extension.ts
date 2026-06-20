@@ -5,6 +5,7 @@ import { resolveToken } from "./token";
 import { ApproverStream } from "./sseClient";
 import { PendingRequestsProvider } from "./requestsProvider";
 import { patchVerdict } from "./approverClient";
+import { addToDomainList } from "./domainList";
 import type { EgressRequest, ResolvedFrame, SnapshotFrame } from "./protocol";
 
 /** The active stream, retained so {@link deactivate} can stop it. */
@@ -123,13 +124,14 @@ export function activate(context: vscode.ExtensionContext): void {
         // Notify immediately — the Squid helper is blocking until a verdict lands.
         const label = `${request.metadata.method || "CONNECT"} ${request.metadata.host}`;
         void vscode.window
-          .showInformationMessage(`Egress: ${label}`, "Allow", "Deny")
+          .showInformationMessage(`Egress: ${label}`, "Allow", "Deny", "All options")
           .then(async (choice) => {
             if (!choice) return;
-            await issueVerdict(
-              choice === "Allow" ? "allowed" : "denied",
-              request,
-            );
+            if (choice === "All options") {
+              await vscode.commands.executeCommand("egressApprover.allOptions", request);
+              return;
+            }
+            await issueVerdict(choice === "Allow" ? "allowed" : "denied", request);
           });
       },
       onResolved: (frame: ResolvedFrame): void => {
@@ -164,6 +166,43 @@ export function activate(context: vscode.ExtensionContext): void {
       "egressApprover.denyRequest",
       async (request: EgressRequest): Promise<void> => {
         await issueVerdict("denied", request);
+      },
+    ),
+    vscode.commands.registerCommand(
+      "egressApprover.alwaysAllowRequest",
+      async (request: EgressRequest): Promise<void> => {
+        const written = await addToDomainList(request.metadata.host, "allowed", output);
+        if (written) await issueVerdict("allowed", request);
+      },
+    ),
+    vscode.commands.registerCommand(
+      "egressApprover.alwaysDenyRequest",
+      async (request: EgressRequest): Promise<void> => {
+        const written = await addToDomainList(request.metadata.host, "denied", output);
+        if (written) await issueVerdict("denied", request);
+      },
+    ),
+    vscode.commands.registerCommand(
+      "egressApprover.allOptions",
+      async (request: EgressRequest): Promise<void> => {
+        type Action =
+          | { kind: "verdict"; verdict: "allowed" | "denied" }
+          | { kind: "always"; verdict: "allowed" | "denied"; list: "allowed" | "denied" };
+        const choice = await vscode.window.showQuickPick<vscode.QuickPickItem & { action: Action }>(
+          [
+            { label: "$(check) Allow", action: { kind: "verdict", verdict: "allowed" } },
+            { label: "$(close) Deny", action: { kind: "verdict", verdict: "denied" } },
+            { label: "$(pass-filled) Always Allow", action: { kind: "always", verdict: "allowed", list: "allowed" } },
+            { label: "$(error) Always Deny", action: { kind: "always", verdict: "denied", list: "denied" } },
+          ],
+          { placeHolder: `Action for ${request.metadata.host}` },
+        );
+        if (!choice) return;
+        if (choice.action.kind === "always") {
+          const written = await addToDomainList(request.metadata.host, choice.action.list, output);
+          if (!written) return;
+        }
+        await issueVerdict(choice.action.verdict, request);
       },
     ),
   );

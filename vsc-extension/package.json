@@ -37,6 +37,19 @@
         "command": "egressApprover.denyRequest",
         "title": "Deny",
         "icon": "$(close)"
+      },
+      {
+        "command": "egressApprover.alwaysAllowRequest",
+        "title": "Always Allow"
+      },
+      {
+        "command": "egressApprover.alwaysDenyRequest",
+        "title": "Always Deny"
+      },
+      {
+        "command": "egressApprover.allOptions",
+        "title": "All Options",
+        "icon": "$(ellipsis)"
       }
     ],
     "views": {
@@ -50,7 +63,10 @@
     "menus": {
       "commandPalette": [
         { "command": "egressApprover.allowRequest", "when": "false" },
-        { "command": "egressApprover.denyRequest", "when": "false" }
+        { "command": "egressApprover.denyRequest", "when": "false" },
+        { "command": "egressApprover.alwaysAllowRequest", "when": "false" },
+        { "command": "egressApprover.alwaysDenyRequest", "when": "false" },
+        { "command": "egressApprover.allOptions", "when": "false" }
       ],
       "view/item/context": [
         {
@@ -62,6 +78,21 @@
           "command": "egressApprover.denyRequest",
           "when": "view == egressApprover.requests && viewItem == pendingRequest",
           "group": "inline@2"
+        },
+        {
+          "command": "egressApprover.allOptions",
+          "when": "view == egressApprover.requests && viewItem == pendingRequest",
+          "group": "inline@3"
+        },
+        {
+          "command": "egressApprover.alwaysAllowRequest",
+          "when": "view == egressApprover.requests && viewItem == pendingRequest",
+          "group": "allOptions@1"
+        },
+        {
+          "command": "egressApprover.alwaysDenyRequest",
+          "when": "view == egressApprover.requests && viewItem == pendingRequest",
+          "group": "allOptions@2"
         }
       ]
     },
