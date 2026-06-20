@@ -6,12 +6,17 @@ if [ ! -f /etc/squid/allowed_domains.txt ]; then
     exit 1
 fi
 
-# Watch for changes to the allowlist and send SIGHUP to squid, which triggers
+if [ ! -f /etc/squid/denied_domains.txt ]; then
+    echo "ERROR: /etc/squid/denied_domains.txt is not mounted. Add a denied_domains.txt to your project's .devcontainer/firewall/ directory." >&2
+    exit 1
+fi
+
+# Watch for changes to the allow/deny lists and send SIGHUP to squid, which triggers
 # a reconfigure (re-reads ACL files). Runs in the background; exits when squid does.
 watch_allowlist() {
-    while inotifywait -e close_write,moved_to,create /etc/squid/allowed_domains.txt 2>/dev/null; do
+    while inotifywait -e close_write,moved_to,create /etc/squid/allowed_domains.txt /etc/squid/denied_domains.txt 2>/dev/null; do
         if [ -n "$SQUID_PID" ] && kill -0 "$SQUID_PID" 2>/dev/null; then
-            echo "allowed_domains.txt changed, reconfiguring squid (PID $SQUID_PID)" >&2
+            echo "domain list changed, reconfiguring squid (PID $SQUID_PID)" >&2
             kill -HUP "$SQUID_PID"
         fi
     done

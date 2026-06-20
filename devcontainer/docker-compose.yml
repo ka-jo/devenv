@@ -49,6 +49,7 @@ services:
       dockerfile: Dockerfile
     volumes:
       - ./firewall/allowed_domains.txt:/etc/squid/allowed_domains.txt:ro
+      - ./firewall/denied_domains.txt:/etc/squid/denied_domains.txt:ro
     # `external` = real internet egress + the path to the approver; `proxy_net` =
     # the internal-only segment shared with the app container (which reaches Squid
     # here but, having no other network, can reach nothing else directly).
