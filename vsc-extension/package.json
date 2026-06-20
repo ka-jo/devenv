@@ -70,8 +70,8 @@
       "properties": {
         "egressApprover.endpoint": {
           "type": "string",
-          "default": "http://127.0.0.1:3129",
-          "description": "Base URL of the approver sidecar (host loopback publish)."
+          "default": "",
+          "description": "Override the approver base URL. Leave empty to auto-discover this window's container endpoint via 'docker port <containerName> 3129/tcp' (the host port is published ephemerally). Set only for dev/test or non-Docker setups."
         },
         "egressApprover.token": {
           "type": "string",
@@ -81,7 +81,7 @@
         "egressApprover.containerName": {
           "type": "string",
           "default": "",
-          "description": "Approver container name or ID for token retrieval ('docker exec <name> cat /run/approver/token'). Leave empty to auto-discover via 'docker ps --filter label=com.docker.compose.service=approver' (first match). Set this if multiple dev containers with an approver service are running simultaneously."
+          "description": "Approver container name or ID, used to discover the endpoint ('docker port <name> 3129/tcp') and retrieve the token ('docker exec <name> cat /run/approver/token'). Injected per-window by 'devenv devcontainer'; leave empty and the extension stays dormant (this scopes prompts to the dev container window they belong to). There is no auto-discovery fallback."
         }
       }
     }

@@ -34,8 +34,8 @@ export interface StreamHandlers {
  * any gap, so no `Last-Event-ID` is needed.
  */
 export class ApproverStream {
-  /** Approver base URL (no trailing slash). */
-  private readonly endpoint: string;
+  /** Per-connect endpoint resolver (re-resolves the container's ephemeral port). */
+  private readonly resolveEndpoint: () => Promise<string>;
   /** Per-connect token resolver. */
   private readonly resolveToken: () => Promise<string>;
   /** Frame/status callbacks. */
@@ -48,16 +48,16 @@ export class ApproverStream {
   private backoffMs = INITIAL_BACKOFF_MS;
 
   /**
-   * @param endpoint Approver base URL (no trailing slash).
+   * @param resolveEndpoint Async provider of the approver base URL, called per connect.
    * @param resolveToken Async provider of the current token, called per connect.
    * @param handlers Frame and status callbacks.
    */
   public constructor(
-    endpoint: string,
+    resolveEndpoint: () => Promise<string>,
     resolveToken: () => Promise<string>,
     handlers: StreamHandlers,
   ) {
-    this.endpoint = endpoint;
+    this.resolveEndpoint = resolveEndpoint;
     this.resolveToken = resolveToken;
     this.handlers = handlers;
   }
@@ -95,11 +95,12 @@ export class ApproverStream {
    * @throws {Error} On non-OK status, a missing body, or a transport failure.
    */
   private async connectOnce(): Promise<void> {
+    const endpoint = await this.resolveEndpoint();
     const token = await this.resolveToken();
     const controller = new AbortController();
     this.controller = controller;
 
-    const res = await fetch(`${this.endpoint}/requests`, {
+    const res = await fetch(`${endpoint}/requests`, {
       method: "GET",
       headers: {
         accept: "text/event-stream",

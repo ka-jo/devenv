@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { readConfig } from "./config";
+import { resolveEndpoint } from "./endpoint";
 import { resolveToken } from "./token";
 import { ApproverStream } from "./sseClient";
 import { PendingRequestsProvider } from "./requestsProvider";
@@ -27,8 +28,11 @@ async function issueVerdict(
 ): Promise<void> {
   const config = readConfig();
   try {
-    const token = await resolveToken(config);
-    await patchVerdict(config.endpoint, token, request.id, verdict);
+    const [endpoint, token] = await Promise.all([
+      resolveEndpoint(config),
+      resolveToken(config),
+    ]);
+    await patchVerdict(endpoint, token, request.id, verdict);
   } catch (err) {
     void vscode.window.showErrorMessage(`Egress approver: ${String(err)}`);
   }
@@ -65,7 +69,9 @@ export function activate(context: vscode.ExtensionContext): void {
     return;
   }
 
-  output.appendLine(`${ts()} [init] endpoint=${config.endpoint}`);
+  output.appendLine(
+    `${ts()} [init] container=${config.containerName || "(token-pinned)"} endpoint=${config.endpoint || "(discover via docker port)"}`,
+  );
 
   const provider = new PendingRequestsProvider();
   const treeView = vscode.window.createTreeView("egressApprover.requests", {
@@ -97,7 +103,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   const client = new ApproverStream(
-    config.endpoint,
+    () => resolveEndpoint(config),
     () => resolveToken(config),
     {
       onSnapshot: (frame: SnapshotFrame): void => {

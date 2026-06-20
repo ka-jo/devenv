@@ -2,13 +2,18 @@ import * as vscode from "vscode";
 
 /** Resolved extension configuration, read from the `egressApprover.*` settings. */
 export interface ApproverConfig {
-  /** Base URL of the approver sidecar (host loopback publish). */
+  /**
+   * Explicit approver base URL override; empty means "discover this window's
+   * container endpoint via `docker port`" (the normal path, now that the host
+   * port is published ephemerally).
+   */
   endpoint: string;
   /** Pinned dev token; empty means "retrieve from the container". */
   token: string;
   /**
-   * Explicit container name or ID for token retrieval; empty means
-   * "auto-discover via `docker ps --filter label=com.docker.compose.service=approver`".
+   * Approver container name or ID, injected per-window by `devenv devcontainer`.
+   * Used both to discover the endpoint and to retrieve the token; empty means
+   * this window is not a devenv dev container (the extension stays dormant).
    */
   containerName: string;
 }
@@ -19,7 +24,7 @@ export interface ApproverConfig {
  */
 export function readConfig(): ApproverConfig {
   const cfg = vscode.workspace.getConfiguration("egressApprover");
-  const endpoint = cfg.get<string>("endpoint", "http://127.0.0.1:3129");
+  const endpoint = cfg.get<string>("endpoint", "").trim();
   return {
     endpoint: endpoint.replace(/\/+$/, ""),
     token: cfg.get<string>("token", "").trim(),
