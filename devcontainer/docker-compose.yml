@@ -7,6 +7,13 @@ services:
     build:
       context: approver
       dockerfile: Dockerfile
+    volumes:
+      # Writable mounts of the firewall domain lists so the approver can append
+      # entries on behalf of the host-side extension (which cannot write WSL files
+      # directly). The firewall container mounts the same host files read-only;
+      # inotify there picks up writes made here because they share the same inode.
+      - ./firewall/allowed_domains.txt:/etc/approver/allowed_domains.txt
+      - ./firewall/denied_domains.txt:/etc/approver/denied_domains.txt
     environment:
       # OPTIONAL override. Left empty by default: the approver mints a fresh random
       # token per start and writes it to the tmpfs below, so the secret never lands
