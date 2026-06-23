@@ -7,11 +7,14 @@ The contract between the three parties in the egress-approval system:
   `external` Docker network; reaches the approver by service name. **The only creator
   of requests, by design — and the only one there will ever be.**
 - **Approver** — this service (`approver/server.ts`). Holds in-flight requests in
-  process memory and brokers verdicts.
-- **Extension** — the host-side VS Code extension (Phase 2). Observes pending
-  requests and issues human verdicts. Reaches the approver over the host loopback
-  publish on `127.0.0.1`; the host port is ephemeral (so concurrent stacks don't
-  collide) and discovered per-window via `docker port <containerName> 3129/tcp`.
+  process memory, brokers verdicts, and is the **policy engine**: it owns the
+  firewall domain lists (via writable bind mounts) and the in-memory per-session
+  policy that short-circuits verdicts for novel domains.
+- **Extension** — the host-side VS Code extension. Observes pending requests, issues
+  human verdicts, and drives the policy surface (domain lists + session policy).
+  Reaches the approver over the host loopback publish on `127.0.0.1`; the host port
+  is ephemeral (so concurrent stacks don't collide) and discovered per-window via
+  `docker port <containerName> 3129/tcp`.
 
 This document is the pinned contract; the approver refactor and the extension build
 against it. It supersedes the Phase 1 surface (`POST /pending`, `GET /pending`,
@@ -67,22 +70,30 @@ interface RequestMetadata {
    * (anonymous). The proxy adapter decodes it: the launcher embeds a per-session
    * token as the Basic-auth username in the egress proxy URL, so it arrives in the
    * `Proxy-Authorization` header; `firewall/approve_helper.sh` decodes it and emits
-   * it here. Render-only like all metadata (see below). Attribution only — a process
-   * can forge or drop the token, so it is never a trust boundary.
+   * it here. The approver keys per-session policy on it (see below). Attribution
+   * only — a process can forge or drop the token, so it is never a trust boundary;
+   * the worst a forged `sessionId` can do is borrow another session's *self-granted*
+   * policy, never escalate past a human verdict.
    */
   sessionId: string;
 }
 ```
 
-The approver **never reasons about `metadata` semantically** — not as a key, not as a
-required field beyond minimal validation. "Approve all for host" and similar are
-application-layer concerns owned entirely by the extension; they never touch this
-service. `sessionId` is no exception: **per-session policy — e.g. "grant host X to
-session Y for 30 minutes" — lives in the extension**, which reads `sessionId` off the
-stream and auto-issues `PATCH` verdicts for matching requests. The approver only
-carries the field. When the proxy is swapped for MITM, only `RequestMetadata` changes
-(the adapter decodes `sessionId` its own way); the stream, the verdict path, and
-correlation are untouched.
+The approver **is the policy engine** for egress decisions. An earlier version of this
+doc held the opposite line — "the approver never reasons about `metadata` semantically;
+per-session policy lives in the extension" — but that stopped being true the moment the
+approver took ownership of the firewall domain lists (`POST /domains`, below). The
+broker now reasons about exactly two metadata fields, and only these two:
+
+- **`host`** — the key for both the durable domain lists and per-session policy.
+- **`sessionId`** — the key for per-session policy: the approver remembers
+  `(sessionId, host) → verdict` and auto-settles matching requests (`POST /requests`
+  short-circuit, below).
+
+Everything else in `metadata` stays render-only. The forward-compat seam still holds:
+under MITM `RequestMetadata` grows and the adapter decodes `host`/`sessionId` its own
+way, but the envelope, the stream, the verdict path, and correlation do not move.
+Host-keying is the one thing MITM will force a reckoning on — see [Out of scope](#out-of-scope-deliberately).
 
 ---
 
@@ -102,6 +113,7 @@ Therefore:
 | Read requests (list / stream / fetch) | extension | **token** |
 | Issue a verdict | extension | **token** |
 | Append to a domain list | extension | **token** |
+| Manage session policy | extension | **token** |
 
 The token is the per-start secret minted by the approver and written to its tmpfs
 (`/run/approver/token`); the extension retrieves it out-of-band
@@ -126,6 +138,18 @@ exactly one consumer and it always wants to block. A non-blocking variant is YAG
 - **Response `200 OK`:** the terminal `EgressRequest` (`status` ∈
   `allowed | denied | expired`, `decidedAt` set).
 - **Response `400`:** malformed body.
+
+**Session-policy short-circuit.** Before a request is ever broadcast or made to block,
+the approver consults per-session policy: if `metadata.sessionId` is non-empty and a
+`(sessionId, host)` entry exists (see [`/sessions`](#sessions)), the request is settled
+*immediately* to that remembered verdict — `200` with `status` already `allowed`/`denied`
+and `decidedAt` set, the same shape a human verdict produces. It never enters `pending`,
+never emits an `added` frame, and never consumes a helper slot beyond the one blocking
+`curl` that returns at once. Any `POST /requests` carrying a known `sessionId` also
+refreshes that session's idle clock (see eviction). Only requests with *no* matching
+session policy fall through to the human path below. (Allowlisted and denylisted hosts
+never reach the approver at all — Squid resolves them — so session policy only ever
+decides genuinely-novel domains; there is no precedence question against the lists.)
 
 Blocking is the idiomatic shape for a Squid `external_acl` helper — the protocol
 expects the helper to block on stdin→stdout, and `curl`-then-parse-one-JSON-blob is
@@ -174,25 +198,110 @@ A human verdict, modeled as a state transition on the request — **not** a sepa
 - **`404`:** unknown `id`.
 - **`409 Conflict`:** the request is already terminal (verdicts are immutable).
 
-### `POST /domains/{kind}` — append to a domain list
+### `POST /domains` — append to a domain list
 
-Adds a host to the named firewall domain list (`allowed` or `denied`). The
-approver holds **writable** bind mounts of both files; this endpoint exists
-because the VS Code extension runs on the Windows host and cannot write WSL
-filesystem paths directly.
+Adds a host to a firewall domain list. The approver holds **writable** bind mounts of
+both files; this endpoint exists because the VS Code extension runs on the Windows host
+and cannot write WSL filesystem paths directly.
+
+The discriminator is the **`policy` field in the body, not a path segment** — the same
+`{ host, policy }` shape used by session policy, so the client speaks one payload
+everywhere. Unlike a session domain (an addressable in-memory sub-resource), a firewall
+domain list is an append to a flat file with no per-host addressing (`GET`/`DELETE` of a
+single host), so the host stays in the body: a command/append endpoint, not a keyed
+resource.
 
 - **Auth:** token.
-- **`kind`:** `allowed` | `denied`.
-- **Request body:** `{ "host": "<bare hostname>" }`.
+- **Request body:** `{ "host": "<bare hostname>", "policy": "allowed" | "denied" }`.
 - **Response `200 OK`:** `{ "added": true }` when written, or
   `{ "added": false, "reason": "already present" }` when the host was already
   in the list (idempotent — not an error).
-- **Response `400`:** malformed body or unknown `kind`.
+- **Response `400`:** malformed body or invalid `policy`.
 - **Response `401`:** missing/invalid token.
 - **Side effect:** if the file does not yet exist (project predates the template
   adding it), it is created with a standard header comment before the entry is
   appended. The firewall sidecar's inotify watch fires on the shared host inode
   and SIGHUPs Squid, so the change is live immediately.
+
+### `/sessions` {#sessions} — per-session policy
+
+A **session** is a bag of remembered host verdicts scoped to one `sessionId`. When a
+request carries a matching `(sessionId, host)`, `POST /requests` auto-settles it to the
+remembered verdict instead of prompting a human (the short-circuit above). This is what
+backs the extension's "Allow for this session" / "Deny for this session" actions.
+
+State lives **only in the approver's process memory** — never on disk. It is not durable
+remembered policy (that's the domain lists); it is a convenience that lives and dies with
+the container, which is the natural bound for a session (the Claude session runs *inside*
+that container). See [eviction](#session-eviction).
+
+```ts
+/** A remembered per-host verdict within a session. `policy` reuses the verdict vocabulary. */
+interface SessionDomain {
+  host: string;
+  policy: "allowed" | "denied";
+}
+
+/** A session's full representation (GET /sessions/{id}). */
+interface Session {
+  id: string;
+  /** Remembered host verdicts. */
+  domains: SessionDomain[];
+  /** Epoch ms the session was created. */
+  createdAt: number;
+  /** Epoch ms of the last approver-visible activity (refreshed by matching POST /requests). */
+  lastSeen: number;
+}
+```
+
+The surface is one uniform lifecycle — **create-by-key / read / delete** — at both the
+session and the domain level. There is **no update verb**: a `PUT`-style idempotent set is
+the upsert flavor we deliberately avoid. To change a host's policy, `DELETE` then `POST`.
+
+| Verb | Path | Body | Success | Errors |
+|---|---|---|---|---|
+| `POST` | `/sessions/{id}` | `{ domains?: SessionDomain[] }` | `201` + `Session` | `400` bad body · `409` id exists |
+| `GET` | `/sessions/{id}` | — | `200` + `Session` | `404` unknown |
+| `DELETE` | `/sessions/{id}` | — | `204` | `404` unknown |
+| `POST` | `/sessions/{id}/domains/{host}` | `{ policy }` | `201` + `SessionDomain` | `400` bad policy · `404` no session · `409` host exists |
+| `GET` | `/sessions/{id}/domains/{host}` | — | `200` + `SessionDomain` | `404` unknown session or host |
+| `DELETE` | `/sessions/{id}/domains/{host}` | — | `204` | `404` unknown session or host |
+
+All token-gated. Notes:
+
+- **Key in path, attributes in body** — mirrors `POST /sessions/{id}` (client supplies the
+  id) down to the domain (`{host}` is the key; `{policy}` is the attribute). The `domains?`
+  array on create is bulk sugar — it carries `host` in each element because a bulk payload
+  can't put keys in the path.
+- **`404`, not upsert.** `POST /sessions/{id}/domains/{host}` on an unknown session is a
+  `404` — adding a domain never implicitly creates the session. (The REST-pure choice; the
+  ordering "ceremony" is paid willingly.)
+- **`409` on duplicates.** Re-creating an existing session, or re-adding an existing host,
+  is a `409` — `POST` stays honestly non-idempotent. Flip a policy via `DELETE` + `POST`.
+- **No persistence, no history.** Evicting a session (manually or by TTL) simply forgets
+  it; in-flight `pending` requests are unaffected (they are keyed by request `id`, not
+  session).
+
+#### Eviction {#session-eviction}
+
+A session has no clean end signal the approver can rely on. The extension's `deactivate`
+hook *can* `DELETE /sessions/{id}` on window close, and does so as a **best-effort
+courtesy** — but it is host-side, fires on the wrong scope (a window outlives many
+sessions; a detached container outlives a window), and isn't guaranteed (async budget,
+`kill -9`). So it is never the correctness mechanism.
+
+The backstop is an **idle-sliding TTL of 2 hours**, owned by the approver:
+
+- `lastSeen` is refreshed on every `POST /requests` carrying the session's id (matched or
+  not). A session active even sporadically never expires.
+- A session idle longer than the TTL is evicted — lazily on next access, plus a cheap
+  periodic sweep so idle sessions don't accumulate.
+- **Idle, not absolute**, precisely because this is a safety net: it must never reap a
+  *live* session and trigger a surprise re-prompt mid-work. The long 2h window makes a
+  false eviction during a brief lull effectively impossible.
+- Caveat: "idle" measures *approver-visible* activity. Allowlisted traffic is fast-pathed
+  at Squid and never reaches the approver, so a session busy on only allowlisted hosts can
+  idle out. Benign — the policy sat unused, and `deactivate` is the real cleanup.
 
 ### `GET /health` — liveness
 
@@ -214,6 +323,10 @@ filesystem paths directly.
 ```
 
 Terminal states are immutable; any transition out of them is `409`.
+
+A session-policy match (above) skips `pending` entirely: the request is born terminal,
+so no `added`/`resolved` pair is observable for it. The diagram covers only requests that
+reach the human path.
 
 ---
 
@@ -326,13 +439,18 @@ already handles concurrent creates (each mints its own `id` + waiter; nothing sh
 
 ## Out of scope (deliberately)
 
-- **Dedupe by host / "approve all for host"** — application-layer (extension) concern;
-  never in the approver. The proxy will not stay host-based (MITM), so host semantics
-  must not be baked into the broker.
-- **Persistent history / remembered verdicts** — no DB. The live waiter map cannot be
-  serialized (waiters are promise resolvers bound to open sockets), and the queryable
-  state is human-scale. If durable audit/history is ever wanted, reach for
-  *file-backed* SQLite (`bun:sqlite`); in-memory SQLite is the cost of a DB with none
-  of its durability and is never the right call here.
+- **Durable, on-disk session policy** — session policy is in-memory only and dies with
+  the container, by design (see [`/sessions`](#sessions)). *Durable* host policy already
+  has a home: the firewall domain lists via `POST /domains`. Persisting session policy
+  would need a DB; the live waiter map can't be serialized anyway (waiters are promise
+  resolvers bound to open sockets). If durable audit/history is ever wanted, reach for
+  *file-backed* SQLite (`bun:sqlite`); in-memory SQLite is the cost of a DB with none of
+  its durability and is never the right call here.
+- **In-place policy edits / upsert** — no `PUT`. Changing a remembered verdict is
+  `DELETE` + `POST`; see the [`/sessions`](#sessions) rationale.
+- **Host-keying under MITM** — both the domain lists and session policy key on `host`.
+  When Squid is replaced by a MITM proxy the keying concept becomes URL/SNI-shaped and
+  this is the seam that will need rework. It is host-shaped on purpose today (that's what
+  the proxy yields) and deliberately deferred, not overlooked.
 - **Frame/representation versioning** — YAGNI for two halves of one repo. A top-level
   `v` is cheap to add if the envelope ever breaks.
