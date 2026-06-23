@@ -4,8 +4,11 @@
  * Squid's external_acl helper submits egress requests via `POST /requests` and blocks
  * until a terminal verdict is reached. The host-side VS Code extension observes pending
  * requests via `GET /requests` (SSE stream or JSON snapshot), issues verdicts via
- * `PATCH /requests/{id}`, appends to domain lists via `POST /domains/{kind}`, and
- * retrieves the token out-of-band from tmpfs.
+ * `PATCH /requests/{id}`, manages firewall domain lists via `POST /domains`, manages
+ * per-session policy via `/sessions/{id}`, and retrieves the token out-of-band from tmpfs.
+ *
+ * The approver is the policy engine: `POST /requests` short-circuits to a remembered
+ * verdict when `(sessionId, host)` matches stored session policy, never prompting a human.
  *
  * See devcontainer/approver/PROTOCOL.md for the full contract.
  */
@@ -102,14 +105,18 @@ interface RequestMetadata {
   /**
    * The Claude session this egress is attributed to, decoded by the proxy adapter
    * from the client's Proxy-Authorization token, or "" when untagged (anonymous).
-   * Render-only like all metadata: the approver never keys or gates on it —
-   * per-session policy is an extension concern. See PROTOCOL.md.
+   * The approver keys per-session policy on it: a matching `(sessionId, host)` entry
+   * short-circuits `POST /requests` to the remembered verdict. Attribution only — a
+   * process can forge or drop the token, so it is never a trust boundary. See PROTOCOL.md.
    */
   sessionId: string;
 }
 
 /** Request lifecycle state: pending is non-terminal; the rest are terminal and immutable. */
 type RequestStatus = "pending" | "allowed" | "denied" | "expired";
+
+/** A human/remembered verdict. The vocabulary shared by verdicts, domain lists, and session policy. */
+type Policy = "allowed" | "denied";
 
 /**
  * The one request representation — used in REST JSON bodies, SSE snapshot/added frames,
@@ -338,8 +345,92 @@ function getRequestsSnapshot(filterStatus?: RequestStatus): EgressRequest[] {
 }
 
 /**
+ * In-memory per-session policy. A session is a bag of remembered `(host → policy)`
+ * verdicts keyed by `sessionId`. State is process-memory only — never persisted —
+ * and dies with the container, which is the natural bound for a session (the Claude
+ * session runs inside that container). See PROTOCOL.md `/sessions`.
+ */
+interface SessionEntry {
+  /** The session id (mirrors the map key). */
+  id: string;
+  /** Remembered per-host verdicts. */
+  domains: Map<string, Policy>;
+  /** Epoch ms the session was created. */
+  createdAt: number;
+  /** Epoch ms of the last approver-visible activity; refreshed by matching POST /requests. */
+  lastSeen: number;
+}
+
+/** Idle-sliding eviction window. A session untouched this long is reaped. @internal */
+const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
+
+/** How often the periodic sweep runs to reap idle sessions. @internal */
+const SESSION_SWEEP_MS = 10 * 60 * 1000;
+
+/** In-process map of live sessions, keyed by sessionId. */
+const sessions = new Map<string, SessionEntry>();
+
+/**
+ * Fetch a session if it exists and has not idled past the TTL, lazily evicting it
+ * if it has. Side-effect-free apart from that eviction; does NOT refresh `lastSeen`
+ * (only session-attributed request traffic does, in {@link postRequests}).
+ * @param id The session id.
+ * @param now Current epoch ms.
+ * @returns The live {@link SessionEntry}, or undefined if unknown or expired.
+ */
+function getLiveSession(id: string, now: number): SessionEntry | undefined {
+  const entry = sessions.get(id);
+  if (!entry) return undefined;
+  if (now - entry.lastSeen > SESSION_TTL_MS) {
+    sessions.delete(id);
+    console.log(`[session] evicted ${id} (idle > ${SESSION_TTL_MS}ms)`);
+    return undefined;
+  }
+  return entry;
+}
+
+/**
+ * Periodic backstop reaping sessions idle past the TTL, so idle entries don't
+ * accumulate between lazy accesses.
+ */
+function sweepSessions(): void {
+  const now = Date.now();
+  for (const [id, entry] of sessions) {
+    if (now - entry.lastSeen > SESSION_TTL_MS) {
+      sessions.delete(id);
+      console.log(`[session] swept ${id} (idle > ${SESSION_TTL_MS}ms)`);
+    }
+  }
+}
+
+/**
+ * Serialize a session for a JSON response. Materializes the domain map as an array.
+ * @param entry The session entry.
+ * @returns A plain object matching the `Session` shape in PROTOCOL.md.
+ */
+function sessionToJson(entry: SessionEntry): {
+  id: string;
+  domains: { host: string; policy: Policy }[];
+  createdAt: number;
+  lastSeen: number;
+} {
+  const domains = Array.from(entry.domains, ([host, policy]) => ({
+    host,
+    policy,
+  }));
+  return {
+    id: entry.id,
+    domains,
+    createdAt: entry.createdAt,
+    lastSeen: entry.lastSeen,
+  };
+}
+
+/**
  * POST /requests — create and await verdict.
- * The proxy helper's sole call. Always blocks until the request reaches a terminal state.
+ * The proxy helper's sole call. Normally blocks until the request reaches a terminal
+ * state. If session policy matches `(sessionId, host)`, settles immediately to the
+ * remembered verdict without ever entering pending or prompting a human.
  * Returns the terminal EgressRequest on success, or 400 on malformed body.
  * If the client aborts before a verdict lands, the request transitions to expired.
  */
@@ -352,6 +443,30 @@ async function postRequests(req: Request): Promise<Response> {
 
   const id = crypto.randomUUID();
   const now = Date.now();
+
+  // Session-policy short-circuit. Any request carrying a known session refreshes its
+  // idle clock; a remembered verdict for this host settles the request at once.
+  if (metadata.sessionId) {
+    const session = getLiveSession(metadata.sessionId, now);
+    if (session) {
+      session.lastSeen = now;
+      const policy = session.domains.get(metadata.host);
+      if (policy) {
+        const settled: EgressRequest = {
+          id,
+          status: policy,
+          metadata,
+          createdAt: now,
+          decidedAt: now,
+        };
+        console.log(
+          `[session-${policy}] ${id} [${metadata.sessionId}] ${metadata.host}`,
+        );
+        return Response.json(settled);
+      }
+    }
+  }
+
   const request: EgressRequest = {
     id,
     status: "pending",
@@ -525,25 +640,17 @@ async function patchRequest(
 }
 
 /**
- * POST /domains/{kind} — append a host to a firewall domain list.
- * Token-gated. Idempotent: returns `200` even if the host is already present.
- * Creates the file with a standard header if it does not yet exist (handles
- * projects set up before the denied list was added to the template).
+ * POST /domains — append a host to a firewall domain list.
+ * Token-gated. The list is selected by the `policy` field in the body (not a path
+ * segment), so the payload matches session policy's `{ host, policy }` shape.
+ * Idempotent: returns `200` even if the host is already present. Creates the file
+ * with a standard header if it does not yet exist (handles projects set up before
+ * the denied list was added to the template).
  *
- * @param req The incoming request with params.kind populated by Bun's router.
+ * @param req The incoming request.
  * @returns 200 on success, 400 on bad input, 401 on bad token.
  */
-async function postDomainEntry(
-  req: BunRequest<"/domains/:kind">,
-): Promise<Response> {
-  const kind = req.params.kind;
-  if (kind !== "allowed" && kind !== "denied") {
-    return Response.json(
-      { error: "kind must be 'allowed' or 'denied'" },
-      { status: 400 },
-    );
-  }
-
+async function postDomainEntry(req: Request): Promise<Response> {
   let body: Record<string, unknown>;
   try {
     body = (await req.json()) as Record<string, unknown>;
@@ -563,7 +670,15 @@ async function postDomainEntry(
     return Response.json({ error: "host required" }, { status: 400 });
   }
 
-  const filePath = DOMAIN_LIST_PATHS[kind];
+  const policy = parsePolicy(body.policy);
+  if (!policy) {
+    return Response.json(
+      { error: "policy must be 'allowed' or 'denied'" },
+      { status: 400 },
+    );
+  }
+
+  const filePath = DOMAIN_LIST_PATHS[policy];
 
   let content: string;
   try {
@@ -571,7 +686,7 @@ async function postDomainEntry(
   } catch {
     // File doesn't exist yet (project predates this list being added to the template).
     // Bootstrap it with the standard header so the firewall sidecar can parse it.
-    content = DOMAIN_LIST_HEADERS[kind];
+    content = DOMAIN_LIST_HEADERS[policy];
     console.log(`[domain-list] created ${filePath}`);
   }
 
@@ -585,14 +700,214 @@ async function postDomainEntry(
     : `${content}\n${host}\n`;
 
   await writeFile(filePath, updated, "utf8");
-  console.log(`[domain-list] ${kind} ← ${host}`);
+  console.log(`[domain-list] ${policy} ← ${host}`);
 
   return Response.json({ added: true });
 }
 
 /**
+ * Coerce an unknown value to a {@link Policy}, or undefined when it is not valid.
+ * @param value The raw value (typically a request body field).
+ * @returns "allowed" | "denied", or undefined when invalid.
+ */
+function parsePolicy(value: unknown): Policy | undefined {
+  if (typeof value !== "string") return undefined;
+  const v = value.trim().toLowerCase();
+  return v === "allowed" || v === "denied" ? v : undefined;
+}
+
+/**
+ * Parse the optional `domains` array on a POST /sessions/{id} body into a validated
+ * host → policy map. A later duplicate host wins (last-write); not an error.
+ * @param value The raw `domains` field.
+ * @returns A Map on success (empty when absent), or an error string for the caller.
+ */
+function parseSessionDomains(value: unknown): Map<string, Policy> | string {
+  const domains = new Map<string, Policy>();
+  if (value === undefined || value === null) return domains;
+  if (!Array.isArray(value)) return "domains must be an array";
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) {
+      return "each domain must be an object";
+    }
+    const record = item as Record<string, unknown>;
+    const rawHost = record.host;
+    if (typeof rawHost !== "string") return "domain host must be a string";
+    const host = rawHost.trim().toLowerCase();
+    if (!host) return "domain host required";
+    const policy = parsePolicy(record.policy);
+    if (!policy) return "domain policy must be 'allowed' or 'denied'";
+    domains.set(host, policy);
+  }
+  return domains;
+}
+
+/**
+ * POST /sessions/{id} — create a session, optionally pre-populated with domains.
+ * Token-gated. The client supplies the id in the path. An empty or absent body
+ * creates an empty session; a `{ domains: [...] }` body bulk-loads policies.
+ * @param req The incoming request with params.id populated by Bun's router.
+ * @returns 201 with the Session, 400 on malformed body, 409 if the id already exists.
+ */
+async function postSession(
+  req: BunRequest<"/sessions/:id">,
+): Promise<Response> {
+  const id = req.params.id;
+  const now = Date.now();
+  if (getLiveSession(id, now)) {
+    return Response.json({ error: "session already exists" }, { status: 409 });
+  }
+
+  // Body is all-optional, so tolerate an empty body (create an empty session).
+  let body: Record<string, unknown> = {};
+  const text = await req.text();
+  if (text.trim()) {
+    try {
+      body = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return Response.json({ error: "invalid json" }, { status: 400 });
+    }
+    if (typeof body !== "object" || body === null) {
+      return Response.json(
+        { error: "body must be a json object" },
+        { status: 400 },
+      );
+    }
+  }
+
+  const domains = parseSessionDomains(body.domains);
+  if (typeof domains === "string") {
+    return Response.json({ error: domains }, { status: 400 });
+  }
+
+  const entry: SessionEntry = { id, domains, createdAt: now, lastSeen: now };
+  sessions.set(id, entry);
+  console.log(`[session] created ${id} (${domains.size} domain(s))`);
+  return Response.json(sessionToJson(entry), { status: 201 });
+}
+
+/**
+ * GET /sessions/{id} — fetch a session and its remembered domains.
+ * Token-gated.
+ * @param req The incoming request with params.id populated by Bun's router.
+ * @returns 200 with the Session, or 404 if unknown or expired.
+ */
+function getSession(req: BunRequest<"/sessions/:id">): Response {
+  const entry = getLiveSession(req.params.id, Date.now());
+  if (!entry) return Response.json({ error: "not found" }, { status: 404 });
+  return Response.json(sessionToJson(entry));
+}
+
+/**
+ * DELETE /sessions/{id} — forget a session and all its policies.
+ * Token-gated. This is the explicit "forget" primitive (and the extension's
+ * best-effort cleanup on window close).
+ * @param req The incoming request with params.id populated by Bun's router.
+ * @returns 204 on delete, or 404 if unknown or already expired.
+ */
+function deleteSession(req: BunRequest<"/sessions/:id">): Response {
+  const id = req.params.id;
+  if (!getLiveSession(id, Date.now())) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+  sessions.delete(id);
+  console.log(`[session] deleted ${id}`);
+  return new Response(null, { status: 204 });
+}
+
+/**
+ * POST /sessions/{id}/domains/{host} — remember a per-host verdict for a session.
+ * Token-gated. Key (`host`) in the path, attribute (`policy`) in the body. Never
+ * upserts the session: an unknown session is a 404. Re-adding an existing host is
+ * a 409 — flip a policy via DELETE + POST.
+ * @param req The incoming request with params.id and params.host populated by Bun's router.
+ * @returns 201 with `{ host, policy }`, 400 on bad body, 404 no session, 409 host exists.
+ */
+async function postSessionDomain(
+  req: BunRequest<"/sessions/:id/domains/:host">,
+): Promise<Response> {
+  const session = getLiveSession(req.params.id, Date.now());
+  if (!session) {
+    return Response.json({ error: "session not found" }, { status: 404 });
+  }
+  const host = req.params.host.trim().toLowerCase();
+  if (!host) {
+    return Response.json({ error: "host required" }, { status: 400 });
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await req.json()) as Record<string, unknown>;
+  } catch {
+    return Response.json({ error: "invalid json" }, { status: 400 });
+  }
+  if (typeof body !== "object" || body === null) {
+    return Response.json(
+      { error: "body must be a json object" },
+      { status: 400 },
+    );
+  }
+  const policy = parsePolicy(body.policy);
+  if (!policy) {
+    return Response.json(
+      { error: "policy must be 'allowed' or 'denied'" },
+      { status: 400 },
+    );
+  }
+
+  if (session.domains.has(host)) {
+    return Response.json({ error: "domain already exists" }, { status: 409 });
+  }
+
+  session.domains.set(host, policy);
+  console.log(`[session] ${req.params.id} ${host} ← ${policy}`);
+  return Response.json({ host, policy }, { status: 201 });
+}
+
+/**
+ * GET /sessions/{id}/domains/{host} — fetch one remembered verdict.
+ * Token-gated.
+ * @param req The incoming request with params.id and params.host populated by Bun's router.
+ * @returns 200 with `{ host, policy }`, or 404 if the session or host is unknown.
+ */
+function getSessionDomain(
+  req: BunRequest<"/sessions/:id/domains/:host">,
+): Response {
+  const session = getLiveSession(req.params.id, Date.now());
+  if (!session) {
+    return Response.json({ error: "session not found" }, { status: 404 });
+  }
+  const host = req.params.host.trim().toLowerCase();
+  const policy = session.domains.get(host);
+  if (!policy) return Response.json({ error: "not found" }, { status: 404 });
+  return Response.json({ host, policy });
+}
+
+/**
+ * DELETE /sessions/{id}/domains/{host} — revoke one remembered verdict.
+ * Token-gated.
+ * @param req The incoming request with params.id and params.host populated by Bun's router.
+ * @returns 204 on delete, or 404 if the session or host is unknown.
+ */
+function deleteSessionDomain(
+  req: BunRequest<"/sessions/:id/domains/:host">,
+): Response {
+  const session = getLiveSession(req.params.id, Date.now());
+  if (!session) {
+    return Response.json({ error: "session not found" }, { status: 404 });
+  }
+  const host = req.params.host.trim().toLowerCase();
+  if (!session.domains.delete(host)) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+  console.log(`[session] ${req.params.id} ${host} removed`);
+  return new Response(null, { status: 204 });
+}
+
+/**
  * Auth helper: reject with 401 if x-approver-token !== TOKEN.
- * Used by token-gated endpoints: GET /requests, GET /requests/{id}, PATCH /requests/{id}.
+ * Used by every token-gated endpoint: GET /requests, GET /requests/{id},
+ * PATCH /requests/{id}, POST /domains, and all /sessions routes.
  */
 function requireToken(req: Request): Response | null {
   const token = req.headers.get("x-approver-token");
@@ -627,11 +942,47 @@ Bun.serve({
         return patchRequest(req);
       },
     },
-    "/domains/:kind": {
-      POST: async (req: BunRequest<"/domains/:kind">): Promise<Response> => {
+    "/domains": {
+      POST: async (req: Request): Promise<Response> => {
         const authErr = requireToken(req);
         if (authErr) return authErr;
         return postDomainEntry(req);
+      },
+    },
+    "/sessions/:id": {
+      POST: async (req: BunRequest<"/sessions/:id">): Promise<Response> => {
+        const authErr = requireToken(req);
+        if (authErr) return authErr;
+        return postSession(req);
+      },
+      GET: (req: BunRequest<"/sessions/:id">): Response => {
+        const authErr = requireToken(req);
+        if (authErr) return authErr;
+        return getSession(req);
+      },
+      DELETE: (req: BunRequest<"/sessions/:id">): Response => {
+        const authErr = requireToken(req);
+        if (authErr) return authErr;
+        return deleteSession(req);
+      },
+    },
+    "/sessions/:id/domains/:host": {
+      POST: async (
+        req: BunRequest<"/sessions/:id/domains/:host">,
+      ): Promise<Response> => {
+        const authErr = requireToken(req);
+        if (authErr) return authErr;
+        return postSessionDomain(req);
+      },
+      GET: (req: BunRequest<"/sessions/:id/domains/:host">): Response => {
+        const authErr = requireToken(req);
+        if (authErr) return authErr;
+        return getSessionDomain(req);
+      },
+      DELETE: (req: BunRequest<"/sessions/:id/domains/:host">): Response => {
+        const authErr = requireToken(req);
+        if (authErr) return authErr;
+        return deleteSessionDomain(req);
       },
     },
     "/*": new Response("not found", { status: 404 }),
@@ -641,6 +992,11 @@ Bun.serve({
     return Response.json({ error: "internal server error" }, { status: 500 });
   },
 });
+
+// Idle-session reaper. Lazy eviction on access covers most cases; this sweep stops
+// idle sessions accumulating between accesses. unref so it never keeps the process alive.
+const sessionSweepTimer: Timer = setInterval(sweepSessions, SESSION_SWEEP_MS);
+sessionSweepTimer.unref();
 
 const tokenSource = process.env.APPROVER_TOKEN
   ? "from APPROVER_TOKEN env"
