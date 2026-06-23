@@ -4,7 +4,7 @@ import { resolveEndpoint } from "./endpoint";
 import { resolveToken } from "./token";
 import { ApproverStream } from "./sseClient";
 import { PendingRequestsProvider } from "./requestsProvider";
-import { patchVerdict, rememberSessionDomain, deleteSession } from "./approverClient";
+import { patchVerdict, rememberSessionPolicy, deleteSession } from "./approverClient";
 import { addToDomainList } from "./domainList";
 import type { EgressRequest, ResolvedFrame, SnapshotFrame } from "./protocol";
 
@@ -67,12 +67,12 @@ async function rememberForSession(
       resolveEndpoint(config),
       resolveToken(config),
     ]);
-    await rememberSessionDomain(
+    await rememberSessionPolicy(
       endpoint,
       token,
       sessionId,
       request.metadata.host,
-      policy,
+      policy === "allowed",
     );
     touchedSessions.add(sessionId);
     return true;

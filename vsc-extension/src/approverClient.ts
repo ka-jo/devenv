@@ -1,5 +1,5 @@
 /**
- * Approver REST client — verdicts and domain list management.
+ * Approver REST client — verdicts and policy management.
  * The observe half lives in {@link ApproverStream}.
  */
 
@@ -35,39 +35,39 @@ export async function patchVerdict(
 }
 
 /**
- * Append a host to a firewall domain list via the approver server.
+ * Append a host to a durable firewall policy list via the approver server.
  *
- * The approver holds writable bind mounts of the domain list files and writes
+ * The approver holds writable bind mounts of the policy list files and writes
  * on behalf of the extension — necessary because the extension runs on the
- * Windows host and cannot access files that live in WSL. The list is selected by
- * the `policy` field in the body (not a path segment), matching the session-policy
- * payload shape.
+ * Windows host and cannot access files that live in WSL. The list (allow vs deny)
+ * is selected by the `allow` boolean in the body, matching the `Policy` payload
+ * shape used everywhere.
  *
  * Idempotent: the server returns `200` even when the host is already present.
  *
  * @param endpoint Approver base URL (no trailing slash).
  * @param token The per-session token for `x-approver-token`.
  * @param host Bare hostname to add (no scheme, no path).
- * @param policy Which list to append to.
+ * @param allow `true` for the allow list, `false` for the deny list.
  * @throws {Error} On network failure or any non-OK status.
  */
-export async function postDomainEntry(
+export async function postPolicy(
   endpoint: string,
   token: string,
   host: string,
-  policy: "allowed" | "denied",
+  allow: boolean,
 ): Promise<void> {
-  const res = await fetch(`${endpoint}/domains`, {
+  const res = await fetch(`${endpoint}/policies`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "x-approver-token": token,
     },
-    body: JSON.stringify({ host, policy }),
+    body: JSON.stringify({ host, allow }),
   });
   if (res.ok) return;
   const text = await res.text().catch(() => "");
-  throw new Error(`POST /domains → HTTP ${res.status}: ${text}`);
+  throw new Error(`POST /policies → HTTP ${res.status}: ${text}`);
 }
 
 /**
@@ -106,10 +106,10 @@ async function ensureSession(
 }
 
 /**
- * Remember a per-host verdict for a Claude session, so the approver auto-settles
+ * Remember a per-host policy for a Claude session, so the approver auto-settles
  * future egress from that session to that host without prompting.
  *
- * Ensures `(sessionId, host) → policy` regardless of prior state: creates the
+ * Ensures `(sessionId, host) → allow` regardless of prior state: creates the
  * session if absent, and overwrites an existing host policy (the approver has no
  * in-place update, so a `409` is resolved by `DELETE` + re-`POST`).
  *
@@ -117,22 +117,22 @@ async function ensureSession(
  * @param token The per-session token for `x-approver-token`.
  * @param sessionId The Claude session id (from request metadata).
  * @param host Bare hostname to remember.
- * @param policy `"allowed"` or `"denied"`.
+ * @param allow `true` to remember an allow, `false` to remember a deny.
  * @throws {Error} On network failure or an unexpected status.
  */
-export async function rememberSessionDomain(
+export async function rememberSessionPolicy(
   endpoint: string,
   token: string,
   sessionId: string,
   host: string,
-  policy: "allowed" | "denied",
+  allow: boolean,
 ): Promise<void> {
   await ensureSession(endpoint, token, sessionId);
 
   const path = `${endpoint}/sessions/${encodeURIComponent(
     sessionId,
-  )}/domains/${encodeURIComponent(host)}`;
-  const body = JSON.stringify({ policy });
+  )}/policies/${encodeURIComponent(host)}`;
+  const body = JSON.stringify({ allow });
 
   let res = await fetch(path, { method: "POST", headers: authHeaders(token), body });
   if (res.status === 409) {
@@ -142,7 +142,7 @@ export async function rememberSessionDomain(
   }
   if (res.ok) return;
   const text = await res.text().catch(() => "");
-  throw new Error(`POST /sessions/${sessionId}/domains/${host} → HTTP ${res.status}: ${text}`);
+  throw new Error(`POST /sessions/${sessionId}/policies/${host} → HTTP ${res.status}: ${text}`);
 }
 
 /**

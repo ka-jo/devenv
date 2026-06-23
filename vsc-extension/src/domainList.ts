@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { readConfig } from "./config";
 import { resolveEndpoint } from "./endpoint";
 import { resolveToken } from "./token";
-import { postDomainEntry } from "./approverClient";
+import { postPolicy } from "./approverClient";
 
 /** The two domain list files managed by the egress firewall. */
 export type DomainListKind = "allowed" | "denied";
@@ -35,7 +35,7 @@ export async function addToDomainList(
       resolveEndpoint(config),
       resolveToken(config),
     ]);
-    await postDomainEntry(endpoint, token, host, kind);
+    await postPolicy(endpoint, token, host, kind === "allowed");
     output.appendLine(
       `${new Date().toTimeString().slice(0, 8)} [domain-list] ${kind} ← ${host}`,
     );
