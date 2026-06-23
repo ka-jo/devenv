@@ -4,12 +4,19 @@ import { resolveEndpoint } from "./endpoint";
 import { resolveToken } from "./token";
 import { ApproverStream } from "./sseClient";
 import { PendingRequestsProvider } from "./requestsProvider";
-import { patchVerdict } from "./approverClient";
+import { patchVerdict, rememberSessionDomain, deleteSession } from "./approverClient";
 import { addToDomainList } from "./domainList";
 import type { EgressRequest, ResolvedFrame, SnapshotFrame } from "./protocol";
 
 /** The active stream, retained so {@link deactivate} can stop it. */
 let stream: ApproverStream | undefined;
+
+/**
+ * Claude session ids this window has written policy for. {@link deactivate} issues a
+ * best-effort `DELETE /sessions/{id}` for each on shutdown — a courtesy, since a session
+ * never outlives its window here; the approver's idle TTL is the real backstop.
+ */
+const touchedSessions = new Set<string>();
 
 /** Return the current local time as `HH:MM:SS` for log prefixes. */
 function ts(): string {
@@ -36,6 +43,42 @@ async function issueVerdict(
     await patchVerdict(endpoint, token, request.id, verdict);
   } catch (err) {
     void vscode.window.showErrorMessage(`Egress approver: ${String(err)}`);
+  }
+}
+
+/**
+ * Remember a verdict for the request's Claude session, so the approver auto-settles
+ * future egress from that session to this host. No-op (returns false) when the request
+ * carries no session id. Surfaces errors via a notification.
+ *
+ * @param policy The verdict to remember for `(sessionId, host)`.
+ * @param request The egress request supplying the session id and host.
+ * @returns True when the policy was stored; false on missing session id or error.
+ */
+async function rememberForSession(
+  policy: "allowed" | "denied",
+  request: EgressRequest,
+): Promise<boolean> {
+  const sessionId = request.metadata.sessionId;
+  if (!sessionId) return false;
+  const config = readConfig();
+  try {
+    const [endpoint, token] = await Promise.all([
+      resolveEndpoint(config),
+      resolveToken(config),
+    ]);
+    await rememberSessionDomain(
+      endpoint,
+      token,
+      sessionId,
+      request.metadata.host,
+      policy,
+    );
+    touchedSessions.add(sessionId);
+    return true;
+  } catch (err) {
+    void vscode.window.showErrorMessage(`Egress approver: ${String(err)}`);
+    return false;
   }
 }
 
@@ -187,20 +230,33 @@ export function activate(context: vscode.ExtensionContext): void {
       async (request: EgressRequest): Promise<void> => {
         type Action =
           | { kind: "verdict"; verdict: "allowed" | "denied" }
+          | { kind: "session"; verdict: "allowed" | "denied" }
           | { kind: "always"; verdict: "allowed" | "denied"; list: "allowed" | "denied" };
-        const choice = await vscode.window.showQuickPick<vscode.QuickPickItem & { action: Action }>(
-          [
-            { label: "$(check) Allow", action: { kind: "verdict", verdict: "allowed" } },
-            { label: "$(close) Deny", action: { kind: "verdict", verdict: "denied" } },
-            { label: "$(pass-filled) Always Allow", action: { kind: "always", verdict: "allowed", list: "allowed" } },
-            { label: "$(error) Always Deny", action: { kind: "always", verdict: "denied", list: "denied" } },
-          ],
-          { placeHolder: `Action for ${request.metadata.host}` },
+        const items: (vscode.QuickPickItem & { action: Action })[] = [
+          { label: "$(check) Allow", action: { kind: "verdict", verdict: "allowed" } },
+          { label: "$(close) Deny", action: { kind: "verdict", verdict: "denied" } },
+        ];
+        // Session-scoped options only when the request is attributed to a Claude session.
+        if (request.metadata.sessionId) {
+          items.push(
+            { label: "$(check-all) Allow for this session", action: { kind: "session", verdict: "allowed" } },
+            { label: "$(circle-slash) Deny for this session", action: { kind: "session", verdict: "denied" } },
+          );
+        }
+        items.push(
+          { label: "$(pass-filled) Always Allow", action: { kind: "always", verdict: "allowed", list: "allowed" } },
+          { label: "$(error) Always Deny", action: { kind: "always", verdict: "denied", list: "denied" } },
         );
+        const choice = await vscode.window.showQuickPick(items, {
+          placeHolder: `Action for ${request.metadata.host}`,
+        });
         if (!choice) return;
         if (choice.action.kind === "always") {
           const written = await addToDomainList(request.metadata.host, choice.action.list, output);
           if (!written) return;
+        } else if (choice.action.kind === "session") {
+          const remembered = await rememberForSession(choice.action.verdict, request);
+          if (!remembered) return;
         }
         await issueVerdict(choice.action.verdict, request);
       },
@@ -208,8 +264,28 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 }
 
-/** Extension teardown: stop the stream and abort any in-flight connection. */
-export function deactivate(): void {
+/**
+ * Extension teardown: stop the stream, then best-effort forget any sessions this
+ * window granted policy to. The deletes are a courtesy — a session never outlives its
+ * window here, and the approver's idle TTL reaps anything this misses (async budget,
+ * crash). Errors are swallowed for that reason.
+ */
+export async function deactivate(): Promise<void> {
   stream?.stop();
   stream = undefined;
+
+  if (touchedSessions.size === 0) return;
+  const config = readConfig();
+  try {
+    const [endpoint, token] = await Promise.all([
+      resolveEndpoint(config),
+      resolveToken(config),
+    ]);
+    await Promise.allSettled(
+      Array.from(touchedSessions, (id) => deleteSession(endpoint, token, id)),
+    );
+  } catch {
+    // Best-effort only; the approver's idle TTL is the real backstop.
+  }
+  touchedSessions.clear();
 }
