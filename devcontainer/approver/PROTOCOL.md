@@ -8,10 +8,10 @@ The contract between the three parties in the egress-approval system:
   of requests, by design — and the only one there will ever be.**
 - **Approver** — this service (`approver/server.ts`). Holds in-flight requests in
   process memory, brokers verdicts, and is the **policy engine**: it owns the
-  firewall domain lists (via writable bind mounts) and the in-memory per-session
+  durable firewall policy lists (via writable bind mounts) and the in-memory per-session
   policy that short-circuits verdicts for novel domains.
 - **Extension** — the host-side VS Code extension. Observes pending requests, issues
-  human verdicts, and drives the policy surface (domain lists + session policy).
+  human verdicts, and drives the policy surface (durable policies + session policy).
   Reaches the approver over the host loopback publish on `127.0.0.1`; the host port
   is ephemeral (so concurrent stacks don't collide) and discovered per-window via
   `docker port <containerName> 3129/tcp`.
@@ -82,12 +82,12 @@ interface RequestMetadata {
 The approver **is the policy engine** for egress decisions. An earlier version of this
 doc held the opposite line — "the approver never reasons about `metadata` semantically;
 per-session policy lives in the extension" — but that stopped being true the moment the
-approver took ownership of the firewall domain lists (`POST /domains`, below). The
+approver took ownership of the firewall policy lists (`POST /policies`, below). The
 broker now reasons about exactly two metadata fields, and only these two:
 
-- **`host`** — the key for both the durable domain lists and per-session policy.
+- **`host`** — the key for both the durable policy lists and per-session policy.
 - **`sessionId`** — the key for per-session policy: the approver remembers
-  `(sessionId, host) → verdict` and auto-settles matching requests (`POST /requests`
+  `(sessionId, host) → allow` and auto-settles matching requests (`POST /requests`
   short-circuit, below).
 
 Everything else in `metadata` stays render-only. The forward-compat seam still holds:
@@ -112,7 +112,7 @@ Therefore:
 | Create a request | proxy helper | **none** — gated by network segmentation; the helper can't hold the host token and doesn't need to |
 | Read requests (list / stream / fetch) | extension | **token** |
 | Issue a verdict | extension | **token** |
-| Append to a domain list | extension | **token** |
+| Append to a policy list | extension | **token** |
 | Manage session policy | extension | **token** |
 
 The token is the per-start secret minted by the approver and written to its tmpfs
@@ -198,25 +198,37 @@ A human verdict, modeled as a state transition on the request — **not** a sepa
 - **`404`:** unknown `id`.
 - **`409 Conflict`:** the request is already terminal (verdicts are immutable).
 
-### `POST /domains` — append to a domain list
+### `POST /policies` — append a durable policy
 
-Adds a host to a firewall domain list. The approver holds **writable** bind mounts of
+Adds a host to a firewall policy list. The approver holds **writable** bind mounts of
 both files; this endpoint exists because the VS Code extension runs on the Windows host
 and cannot write WSL filesystem paths directly.
 
-The discriminator is the **`policy` field in the body, not a path segment** — the same
-`{ host, policy }` shape used by session policy, so the client speaks one payload
-everywhere. Unlike a session domain (an addressable in-memory sub-resource), a firewall
-domain list is an append to a flat file with no per-host addressing (`GET`/`DELETE` of a
+A **policy** is the unit shared by the durable lists and session policy — the same shape
+everywhere, so the client speaks one payload:
+
+```ts
+/** A stored allow/deny rule binding a host to a decision. Strictly binary — never `pending`/`expired`. */
+interface Policy {
+  /** Trimmed, lowercased target hostname. */
+  host: string;
+  /** Whether egress to `host` is permitted. */
+  allow: boolean;
+}
+```
+
+The list (allow vs deny) is selected by the **`allow` boolean in the body, not a path
+segment**. Unlike a session policy (an addressable in-memory sub-resource), a durable
+policy list is an append to a flat file with no per-host addressing (`GET`/`DELETE` of a
 single host), so the host stays in the body: a command/append endpoint, not a keyed
 resource.
 
 - **Auth:** token.
-- **Request body:** `{ "host": "<bare hostname>", "policy": "allowed" | "denied" }`.
+- **Request body:** a `Policy` — `{ "host": "<bare hostname>", "allow": true | false }`.
 - **Response `200 OK`:** `{ "added": true }` when written, or
   `{ "added": false, "reason": "already present" }` when the host was already
   in the list (idempotent — not an error).
-- **Response `400`:** malformed body or invalid `policy`.
+- **Response `400`:** malformed body or non-boolean `allow`.
 - **Response `401`:** missing/invalid token.
 - **Side effect:** if the file does not yet exist (project predates the template
   adding it), it is created with a standard header comment before the entry is
@@ -231,22 +243,25 @@ remembered verdict instead of prompting a human (the short-circuit above). This 
 backs the extension's "Allow for this session" / "Deny for this session" actions.
 
 State lives **only in the approver's process memory** — never on disk. It is not durable
-remembered policy (that's the domain lists); it is a convenience that lives and dies with
+remembered policy (that's the policy lists); it is a convenience that lives and dies with
 the container, which is the natural bound for a session (the Claude session runs *inside*
 that container). See [eviction](#session-eviction).
 
+A session policy is a [`Policy`](#post-policies--append-a-durable-policy) plus the owning
+session id:
+
 ```ts
-/** A remembered per-host verdict within a session. `policy` reuses the verdict vocabulary. */
-interface SessionDomain {
-  host: string;
-  policy: "allowed" | "denied";
+/** A `Policy` remembered within one session; carries its owning session id. */
+interface SessionPolicy extends Policy {
+  /** The owning session id (mirrors the path `{id}` it was created under). */
+  session: string;
 }
 
 /** A session's full representation (GET /sessions/{id}). */
 interface Session {
   id: string;
-  /** Remembered host verdicts. */
-  domains: SessionDomain[];
+  /** Remembered policies. */
+  policies: SessionPolicy[];
   /** Epoch ms the session was created. */
   createdAt: number;
   /** Epoch ms of the last approver-visible activity (refreshed by matching POST /requests). */
@@ -255,26 +270,26 @@ interface Session {
 ```
 
 The surface is one uniform lifecycle — **create-by-key / read / delete** — at both the
-session and the domain level. There is **no update verb**: a `PUT`-style idempotent set is
+session and the policy level. There is **no update verb**: a `PUT`-style idempotent set is
 the upsert flavor we deliberately avoid. To change a host's policy, `DELETE` then `POST`.
 
 | Verb | Path | Body | Success | Errors |
 |---|---|---|---|---|
-| `POST` | `/sessions/{id}` | `{ domains?: SessionDomain[] }` | `201` + `Session` | `400` bad body · `409` id exists |
+| `POST` | `/sessions/{id}` | `{ policies?: Policy[] }` | `201` + `Session` | `400` bad body · `409` id exists |
 | `GET` | `/sessions/{id}` | — | `200` + `Session` | `404` unknown |
 | `DELETE` | `/sessions/{id}` | — | `204` | `404` unknown |
-| `POST` | `/sessions/{id}/domains/{host}` | `{ policy }` | `201` + `SessionDomain` | `400` bad policy · `404` no session · `409` host exists |
-| `GET` | `/sessions/{id}/domains/{host}` | — | `200` + `SessionDomain` | `404` unknown session or host |
-| `DELETE` | `/sessions/{id}/domains/{host}` | — | `204` | `404` unknown session or host |
+| `POST` | `/sessions/{id}/policies/{host}` | `{ allow }` | `201` + `SessionPolicy` | `400` bad allow · `404` no session · `409` host exists |
+| `GET` | `/sessions/{id}/policies/{host}` | — | `200` + `SessionPolicy` | `404` unknown session or host |
+| `DELETE` | `/sessions/{id}/policies/{host}` | — | `204` | `404` unknown session or host |
 
 All token-gated. Notes:
 
 - **Key in path, attributes in body** — mirrors `POST /sessions/{id}` (client supplies the
-  id) down to the domain (`{host}` is the key; `{policy}` is the attribute). The `domains?`
-  array on create is bulk sugar — it carries `host` in each element because a bulk payload
-  can't put keys in the path.
-- **`404`, not upsert.** `POST /sessions/{id}/domains/{host}` on an unknown session is a
-  `404` — adding a domain never implicitly creates the session. (The REST-pure choice; the
+  id) down to the policy (`{host}` is the key; `{allow}` is the attribute). The `policies?`
+  array on create is bulk sugar — each element is a full `Policy` (carrying its own `host`)
+  because a bulk payload can't put keys in the path.
+- **`404`, not upsert.** `POST /sessions/{id}/policies/{host}` on an unknown session is a
+  `404` — adding a policy never implicitly creates the session. (The REST-pure choice; the
   ordering "ceremony" is paid willingly.)
 - **`409` on duplicates.** Re-creating an existing session, or re-adding an existing host,
   is a `409` — `POST` stays honestly non-idempotent. Flip a policy via `DELETE` + `POST`.
@@ -441,14 +456,14 @@ already handles concurrent creates (each mints its own `id` + waiter; nothing sh
 
 - **Durable, on-disk session policy** — session policy is in-memory only and dies with
   the container, by design (see [`/sessions`](#sessions)). *Durable* host policy already
-  has a home: the firewall domain lists via `POST /domains`. Persisting session policy
+  has a home: the firewall policy lists via `POST /policies`. Persisting session policy
   would need a DB; the live waiter map can't be serialized anyway (waiters are promise
   resolvers bound to open sockets). If durable audit/history is ever wanted, reach for
   *file-backed* SQLite (`bun:sqlite`); in-memory SQLite is the cost of a DB with none of
   its durability and is never the right call here.
 - **In-place policy edits / upsert** — no `PUT`. Changing a remembered verdict is
   `DELETE` + `POST`; see the [`/sessions`](#sessions) rationale.
-- **Host-keying under MITM** — both the domain lists and session policy key on `host`.
+- **Host-keying under MITM** — both the durable policy lists and session policy key on `host`.
   When Squid is replaced by a MITM proxy the keying concept becomes URL/SNI-shaped and
   this is the seam that will need rework. It is host-shaped on purpose today (that's what
   the proxy yields) and deliberately deferred, not overlooked.
