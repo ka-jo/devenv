@@ -63,6 +63,12 @@ if ! command -v jq > /dev/null 2>&1; then
     sudo apt-get install -y jq
 fi
 
+# Ensure wslu is available for wslvar/wslpath helpers used by devenv commands.
+if ! command -v wslvar > /dev/null 2>&1; then
+    echo "installing wslu..."
+    sudo apt-get install -y wslu
+fi
+
 # VS Code: register devcontainer-configs/ as a repository configuration path so
 # per-project devcontainer setups can live in ~/devenv without being committed to
 # project repos. VS Code derives the lookup path from `git remote -v`; place
