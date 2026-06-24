@@ -5,6 +5,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 WORKDIR /app
 # No dependencies — the server uses only Bun + Node built-ins.
 COPY server.ts ./
+COPY types ./types
+COPY data ./data
+COPY controllers ./controllers
+COPY core ./core
 
 EXPOSE 3129
 
