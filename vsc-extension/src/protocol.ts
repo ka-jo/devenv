@@ -8,6 +8,51 @@
 /** Request lifecycle state; `pending` is non-terminal, the rest are terminal. */
 export type RequestStatus = "pending" | "allowed" | "denied" | "expired";
 
+/**
+ * A human verdict on an in-flight request — strictly `allowed | denied`.
+ * Distinct from the `allow` boolean in a {@link Policy}: a verdict decides one
+ * request; a policy is a stored rule. `expired` is system-only and never a valid
+ * verdict input.
+ */
+export type Verdict = "allowed" | "denied";
+
+/**
+ * A stored allow/deny rule binding a host to a decision. The shared payload unit
+ * for `POST /policies` bodies and the attribute portion of session policy operations.
+ * Strictly binary — never `pending` / `expired`.
+ */
+export interface Policy {
+  /** Trimmed, lowercased target hostname the rule applies to. */
+  host: string;
+  /** Whether egress to `host` is permitted. */
+  allow: boolean;
+}
+
+/**
+ * A {@link Policy} remembered within the scope of one Claude session. Returned by
+ * `POST /sessions/{id}/policies/{host}` and `GET /sessions/{id}/policies/{host}`.
+ */
+export interface SessionPolicy extends Policy {
+  /** The owning session's id (mirrors the `{id}` path segment). */
+  session: string;
+}
+
+/**
+ * Wire shape of a session as returned by `POST /sessions/{id}` and
+ * `GET /sessions/{id}`. Holds remembered per-host policies in the approver's
+ * process memory only — state dies with the container.
+ */
+export interface Session {
+  /** The session id (client-supplied on create). */
+  id: string;
+  /** Remembered policies, one per host. */
+  policies: SessionPolicy[];
+  /** Epoch ms the session was created. */
+  createdAt: number;
+  /** Epoch ms of the last approver-visible activity (refreshed by matching POST /requests). */
+  lastSeen: number;
+}
+
 /** Terminal subset of {@link RequestStatus}. */
 export type TerminalStatus = "allowed" | "denied" | "expired";
 

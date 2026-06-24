@@ -6,7 +6,7 @@ import { ApproverStream } from "./sseClient";
 import { PendingRequestsProvider } from "./requestsProvider";
 import { patchVerdict, rememberSessionPolicy, deleteSession } from "./approverClient";
 import { addToDomainList } from "./domainList";
-import type { EgressRequest, ResolvedFrame, SnapshotFrame } from "./protocol";
+import type { EgressRequest, ResolvedFrame, SnapshotFrame, Verdict } from "./protocol";
 
 /** The active stream, retained so {@link deactivate} can stop it. */
 let stream: ApproverStream | undefined;
@@ -31,7 +31,7 @@ function ts(): string {
  * @param request The egress request to settle.
  */
 async function issueVerdict(
-  verdict: "allowed" | "denied",
+  verdict: Verdict,
   request: EgressRequest,
 ): Promise<void> {
   const config = readConfig();
@@ -56,7 +56,7 @@ async function issueVerdict(
  * @returns True when the policy was stored; false on missing session id or error.
  */
 async function rememberForSession(
-  policy: "allowed" | "denied",
+  policy: Verdict,
   request: EgressRequest,
 ): Promise<boolean> {
   const sessionId = request.metadata.sessionId;
@@ -229,9 +229,9 @@ export function activate(context: vscode.ExtensionContext): void {
       "egressApprover.allOptions",
       async (request: EgressRequest): Promise<void> => {
         type Action =
-          | { kind: "verdict"; verdict: "allowed" | "denied" }
-          | { kind: "session"; verdict: "allowed" | "denied" }
-          | { kind: "always"; verdict: "allowed" | "denied"; list: "allowed" | "denied" };
+          | { kind: "verdict"; verdict: Verdict }
+          | { kind: "session"; verdict: Verdict }
+          | { kind: "always"; verdict: Verdict; list: "allowed" | "denied" };
         const items: (vscode.QuickPickItem & { action: Action })[] = [
           { label: "$(check) Allow", action: { kind: "verdict", verdict: "allowed" } },
           { label: "$(close) Deny", action: { kind: "verdict", verdict: "denied" } },

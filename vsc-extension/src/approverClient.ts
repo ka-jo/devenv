@@ -3,6 +3,8 @@
  * The observe half lives in {@link ApproverStream}.
  */
 
+import type { Policy, Verdict } from "./protocol";
+
 /**
  * Issue an allow or deny verdict for a pending egress request.
  *
@@ -19,7 +21,7 @@ export async function patchVerdict(
   endpoint: string,
   token: string,
   id: string,
-  verdict: "allowed" | "denied",
+  verdict: Verdict,
 ): Promise<void> {
   const res = await fetch(`${endpoint}/requests/${encodeURIComponent(id)}`, {
     method: "PATCH",
@@ -63,7 +65,7 @@ export async function postPolicy(
       "content-type": "application/json",
       "x-approver-token": token,
     },
-    body: JSON.stringify({ host, allow }),
+    body: JSON.stringify({ host, allow } satisfies Policy),
   });
   if (res.ok) return;
   const text = await res.text().catch(() => "");
@@ -132,7 +134,7 @@ export async function rememberSessionPolicy(
   const path = `${endpoint}/sessions/${encodeURIComponent(
     sessionId,
   )}/policies/${encodeURIComponent(host)}`;
-  const body = JSON.stringify({ allow });
+  const body = JSON.stringify({ allow } satisfies Pick<Policy, "allow">);
 
   let res = await fetch(path, { method: "POST", headers: authHeaders(token), body });
   if (res.status === 409) {
