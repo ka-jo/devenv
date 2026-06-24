@@ -23,7 +23,7 @@ cmd_install_extension() {
 
     if [[ "$skip_build" -eq 0 ]]; then
         echo "building extension..."
-        run_quiet pnpm --dir "$REPO_DIR/vsc-extension" run package
+        run_quiet env COREPACK_ENABLE_DOWNLOAD_PROMPT=0 pnpm --dir "$REPO_DIR/vsc-extension" run package
     fi
 
     local vsix
