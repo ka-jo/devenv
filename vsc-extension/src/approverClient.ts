@@ -82,45 +82,21 @@ function authHeaders(token: string): Record<string, string> {
 }
 
 /**
- * Ensure a session resource exists, creating it empty if absent.
- *
- * `POST /sessions/{id}` returns `201` on create and `409` when it already exists;
- * both mean "the session now exists," so both resolve. This is the upsert the REST
- * surface deliberately omits, reassembled client-side from idempotent-friendly calls.
- *
- * @param endpoint Approver base URL (no trailing slash).
- * @param token The per-session token for `x-approver-token`.
- * @param sessionId The Claude session id.
- * @throws {Error} On network failure or any status other than 201/409.
- */
-async function ensureSession(
-  endpoint: string,
-  token: string,
-  sessionId: string,
-): Promise<void> {
-  const res = await fetch(
-    `${endpoint}/sessions/${encodeURIComponent(sessionId)}`,
-    { method: "POST", headers: authHeaders(token), body: "{}" },
-  );
-  if (res.ok || res.status === 409) return;
-  const text = await res.text().catch(() => "");
-  throw new Error(`POST /sessions → HTTP ${res.status}: ${text}`);
-}
-
-/**
  * Remember a per-host policy for a Claude session, so the approver auto-settles
  * future egress from that session to that host without prompting.
  *
- * Ensures `(sessionId, host) → allow` regardless of prior state: creates the
- * session if absent, and overwrites an existing host policy (the approver has no
- * in-place update, so a `409` is resolved by `DELETE` + re-`POST`).
+ * Overwrites an existing host policy (the approver has no in-place update, so a
+ * `409` is resolved by `DELETE` + re-`POST`). The session must already exist —
+ * it is created by the claude launcher wrapper before Claude starts, not here.
+ * A `404` means the session was never registered or its TTL has expired.
  *
  * @param endpoint Approver base URL (no trailing slash).
  * @param token The per-session token for `x-approver-token`.
  * @param sessionId The Claude session id (from request metadata).
  * @param host Bare hostname to remember.
  * @param allow `true` to remember an allow, `false` to remember a deny.
- * @throws {Error} On network failure or an unexpected status.
+ * @throws {Error} On network failure, a `404` (session absent/expired), or any
+ *   other unexpected status.
  */
 export async function rememberSessionPolicy(
   endpoint: string,
@@ -129,8 +105,6 @@ export async function rememberSessionPolicy(
   host: string,
   allow: boolean,
 ): Promise<void> {
-  await ensureSession(endpoint, token, sessionId);
-
   const path = `${endpoint}/sessions/${encodeURIComponent(
     sessionId,
   )}/policies/${encodeURIComponent(host)}`;

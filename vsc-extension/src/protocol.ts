@@ -38,12 +38,12 @@ export interface SessionPolicy extends Policy {
 }
 
 /**
- * Wire shape of a session as returned by `POST /sessions/{id}` and
+ * Wire shape of a session as returned by `POST /sessions` and
  * `GET /sessions/{id}`. Holds remembered per-host policies in the approver's
  * process memory only — state dies with the container.
  */
 export interface Session {
-  /** The session id (client-supplied on create). */
+  /** The session id (server-minted on create). */
   id: string;
   /** Remembered policies, one per host. */
   policies: SessionPolicy[];
