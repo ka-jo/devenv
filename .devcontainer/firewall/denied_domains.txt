@@ -6,3 +6,4 @@ mobile.events.data.microsoft.com
 telemetry.individual.githubcopilot.com
 proxy.individual.githubcopilot.com
 westus2-0.in.applicationinsights.azure.com
+westus-0.in.applicationinsights.azure.com
