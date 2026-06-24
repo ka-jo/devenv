@@ -16,8 +16,8 @@ import type { SessionStore } from "../data/session-store.ts";
 
 /** The handler bundle the session controller exposes to the route table. */
 export interface SessionController {
-  /** POST /sessions — create a session; the server mints the id. */
-  postSession(req: BunRequest): Promise<Response>;
+  /** POST /sessions/{id} — create a session. */
+  postSession(req: BunRequest<"/sessions/:id">): Promise<Response>;
   /** GET /sessions/{id} — fetch a session. */
   getSession(req: BunRequest<"/sessions/:id">): Response;
   /** DELETE /sessions/{id} — forget a session. */
@@ -27,7 +27,9 @@ export interface SessionController {
     req: BunRequest<"/sessions/:id/policies/:host">,
   ): Promise<Response>;
   /** GET /sessions/{id}/policies/{host} — fetch one remembered policy. */
-  getSessionPolicy(req: BunRequest<"/sessions/:id/policies/:host">): Response;
+  getSessionPolicy(
+    req: BunRequest<"/sessions/:id/policies/:host">,
+  ): Response;
   /** DELETE /sessions/{id}/policies/{host} — revoke one remembered policy. */
   deleteSessionPolicy(
     req: BunRequest<"/sessions/:id/policies/:host">,
@@ -35,7 +37,7 @@ export interface SessionController {
 }
 
 /**
- * Parse the optional `policies` array on a POST /sessions body into a validated
+ * Parse the optional `policies` array on a POST /sessions/{id} body into a validated
  * host → allow map. A later duplicate host wins (last-write); not an error.
  * @param value The raw `policies` field.
  * @returns A Map on success (empty when absent), or an error string for the caller.
@@ -69,16 +71,24 @@ export function createSessionController(
   sessions: SessionStore,
 ): SessionController {
   /**
-   * POST /sessions — create a session, optionally pre-populated with policies.
-   * Token-gated. The server mints a fresh UUID for the new session. An empty or
-   * absent body creates an empty session; a `{ policies: [...] }` body bulk-loads
-   * policies.
-   * @param req The incoming request.
-   * @returns 201 with the Session (including the server-minted `id`), or 400 on a
-   *   malformed body.
+   * POST /sessions/{id} — create a session, optionally pre-populated with policies.
+   * Token-gated. The client supplies the id in the path. An empty or absent body
+   * creates an empty session; a `{ policies: [...] }` body bulk-loads policies.
+   * @param req The incoming request with params.id populated by Bun's router.
+   * @returns 201 with the Session, 400 on malformed body, 409 if the id already exists.
    */
-  async function postSession(req: BunRequest): Promise<Response> {
+  async function postSession(
+    req: BunRequest<"/sessions/:id">,
+  ): Promise<Response> {
     const now = Date.now();
+    // Existence is checked up front so a 409 preempts body-validation 400s, matching the
+    // original precedence; create() re-checks atomically below.
+    if (sessions.get(req.params.id, now)) {
+      return Response.json(
+        { error: "session already exists" },
+        { status: 409 },
+      );
+    }
 
     // Body is all-optional, so tolerate an empty body (create an empty session).
     let body: Record<string, unknown> = {};
@@ -104,12 +114,12 @@ export function createSessionController(
       return Response.json({ error: policies }, { status: 400 });
     }
 
-    const id = crypto.randomUUID();
-    // Server-minted UUIDs are globally unique; create() returning null here would
-    // indicate a bug (UUID collision), not a client error.
-    const session = sessions.create(id, policies, now);
+    const session = sessions.create(req.params.id, policies, now);
     if (!session) {
-      return Response.json({ error: "internal server error" }, { status: 500 });
+      return Response.json(
+        { error: "session already exists" },
+        { status: 409 },
+      );
     }
     return Response.json(session, { status: 201 });
   }

@@ -5,7 +5,7 @@
  * until a terminal verdict is reached. The host-side VS Code extension observes pending
  * requests via `GET /requests` (SSE stream or JSON snapshot), issues verdicts via
  * `PATCH /requests/{id}`, manages durable firewall policies via `POST /policies`, manages
- * per-session policy via `/sessions/{id}`, creates sessions via `POST /sessions`, and retrieves the token out-of-band from tmpfs.
+ * per-session policy via `/sessions/{id}`, and retrieves the token out-of-band from tmpfs.
  *
  * The approver is the policy engine: `POST /requests` short-circuits to a remembered
  * verdict when `(sessionId, host)` matches stored session policy, never prompting a human.
@@ -55,10 +55,8 @@ Bun.serve({
     "/policies": {
       POST: withAuth(policyController.postPolicy),
     },
-    "/sessions": {
-      POST: withAuth(sessionController.postSession),
-    },
     "/sessions/:id": {
+      POST: withAuth(sessionController.postSession),
       GET: withAuth(sessionController.getSession),
       DELETE: withAuth(sessionController.deleteSession),
     },
