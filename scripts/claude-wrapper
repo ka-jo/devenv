@@ -1,0 +1,6 @@
+#!/bin/sh
+token="$(cat /proc/sys/kernel/random/uuid)"
+proxy="http://${token}:x@firewall:3128"
+exec env HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" \
+         http_proxy="$proxy" https_proxy="$proxy" \
+         claude "$@"

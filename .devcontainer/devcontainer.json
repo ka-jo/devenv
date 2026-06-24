@@ -9,6 +9,7 @@
         "egressApprover.containerName": "devenv-approver",
         "claudeCode.allowDangerouslySkipPermissions": true,
         "claudeCode.initialPermissionMode": "bypassPermissions",
+        "claudeCode.claudeProcessWrapper": "/home/ka-jo/devenv/scripts/claude-wrapper",
         "terminal.integrated.defaultProfile.linux": "zsh",
         "terminal.integrated.profiles.linux": {
           "bash": {
