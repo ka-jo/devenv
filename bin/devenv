@@ -2,6 +2,7 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
+WORKTREES_DIR="$REPO_DIR/worktrees"
 LIB_DIR="$REPO_DIR/lib"
 
 for lib in "$LIB_DIR"/*.sh; do
@@ -12,6 +13,8 @@ case "${1:-}" in
     update)            cmd_update ;;
     devcontainer)      shift; cmd_devcontainer "$@" ;;
     install-extension) shift; cmd_install_extension "$@" ;;
+    clone)             shift; cmd_clone "$@" ;;
+    worktree)          shift; cmd_worktree "$@" ;;
     *)
         echo "usage: devenv <command>"
         echo ""
@@ -19,6 +22,10 @@ case "${1:-}" in
         echo "  update                          pull the latest devenv repo"
         echo "  devcontainer [--name <name>]    copy/update .devcontainer in the current project"
         echo "  install-extension [--skip-build] install the egress approver VS Code extension on Windows"
+        echo "  clone <url> [name]              bare-clone a repo into worktrees/<name>/.git + checkout its default branch"
+        echo "  worktree add <repo> <branch> [base]   add a worktree at worktrees/<repo>/<branch>"
+        echo "  worktree rm <repo> <branch> [--force] remove a worktree"
+        echo "  worktree list [repo]            list worktrees for one repo, or all repos"
         exit 1
         ;;
 esac

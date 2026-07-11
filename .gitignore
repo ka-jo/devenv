@@ -13,3 +13,6 @@ devcontainer/.env
 # Claude Code runtime state (machine-local, never committed)
 .claude/worktrees/
 .claude/settings.local.json
+
+# repos cloned via `devenv clone` / `devenv worktree` (machine-local)
+/worktrees/
