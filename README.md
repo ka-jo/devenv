@@ -30,6 +30,7 @@ bin/
   claude-wrapper               # process wrapper referenced by the dev container's claudeCode.claudeProcessWrapper
 lib/                         # one file per devenv subcommand, sourced by bin/devenv
 install.sh                    # symlinks claude/* into ~/.claude and installs the `devenv` CLI
+worktrees/                    # gitignored — repos managed by `devenv clone`/`devenv worktree`, see below
 ```
 
 ## Setting up a new machine
@@ -70,8 +71,37 @@ Hard-requiring `~/devenv` keeps `install.sh` simple (no auto-healing symlink lay
 ## The `devenv` CLI
 
 ```
-devenv update                          pull the latest devenv repo
-devenv devcontainer [--name <name>]    copy/update .devcontainer in the current project
+devenv update                                  pull the latest devenv repo
+devenv devcontainer [--name <name>]            copy/update .devcontainer in the current project
+devenv install-extension [--skip-build]        install the egress approver VS Code extension on Windows
+devenv clone <url> [name]                      bare-clone a repo into worktrees/<name>/.git + checkout its default branch
+devenv worktree add <repo> <branch> [base]     add a worktree at worktrees/<repo>/<branch>
+devenv worktree rm <repo> <branch> [--force]   remove a worktree and delete its local branch
+devenv worktree list [repo]                    list worktrees for one repo, or all repos
+```
+
+### Working with git worktrees
+
+`devenv clone`/`devenv worktree` manage repos under `worktrees/<repo>/` (gitignored, machine-local). Each repo is a **bare** clone at `worktrees/<repo>/.git`, and every branch — including the default one — is checked out as an ordinary worktree alongside it, e.g.:
+
+```
+worktrees/
+  my-repo/
+    .git/                # bare — never cd into this, no working tree here
+    main/                # a normal checkout, like any other branch
+    feature/my-branch/   # branch names with slashes nest naturally
+    chore/my-branch/
+```
+
+No checkout is "the base repo": the bare `.git` holds no files itself, so every branch is a symmetric, independently addable/removable worktree, and none of them can be accidentally edited or committed to in place of another.
+
+```bash
+devenv clone git@github.com:me/my-repo.git          # -> worktrees/my-repo/<default-branch>
+devenv worktree add my-repo feature/my-branch        # new branch off the default, or checks out an existing one
+devenv worktree add my-repo chore/my-branch main      # new branch off an explicit base
+devenv worktree list my-repo                          # or: devenv worktree list (all repos)
+devenv worktree rm my-repo feature/my-branch           # removes the worktree + deletes the local branch (git branch -d semantics)
+devenv worktree rm my-repo feature/my-branch --force   # force-removes a dirty worktree, force-deletes an unmerged branch (-D)
 ```
 
 ### Adding the dev container to a new project

@@ -18,6 +18,7 @@ There is no build, test, or lint step. The repo is bash scripts + config files.
 - **`devenv devcontainer` preserves project-local edits** to `devcontainer.json` and `firewall/allowed_domains.txt` (`PRESERVE` array in `lib/devcontainer.sh`). Anything else in `devcontainer/` is overwritten on re-run, so don't put project-specific state in other files.
 - **`bin/` holds only entry points with an external contract** (`devenv`, `claude-wrapper`) — referenced by hardcoded absolute paths from `devcontainer.json`/`Dockerfile`. Only `devenv` gets symlinked onto `$PATH` (never the whole `bin/` dir). Per-subcommand implementation lives in `lib/*.sh`, one file per `devenv` subcommand, sourced by `bin/devenv`.
 - **`install.sh` lives at the repo root, not in `bin/`** — it's the one-time bootstrap step run before `bin/devenv` is even on `$PATH`, and keeping it out of `bin/` sidesteps ever having a script named `install` on `$PATH` (it would shadow the coreutils `install` command used by build tooling).
+- **`worktrees/<repo>/.git` is always bare, and no branch checkout is "the base repo".** `devenv clone`/`devenv worktree` treat every branch — including the default one — as an ordinary worktree under `worktrees/<repo>/<branch-path>`, symmetric with and independently removable from the rest. Don't reintroduce a non-bare "primary" checkout; it breaks that symmetry and risks accidental commits landing in the wrong place. `worktrees/` is gitignored (machine-local).
 
 ## Adding a new top-level claude config folder
 
@@ -27,6 +28,9 @@ Add a `link_relative` line to `install.sh` and re-run it. The script is idempote
 
 - `devenv update` — `git pull` in `~/devenv`.
 - `devenv devcontainer [--name <name>]` — copy/refresh `.devcontainer/` in the cwd; creates the `shared-pnpm-store` Docker volume on first run. `--name` rewrites the `"name"` field in `devcontainer.json`.
+- `devenv install-extension [--skip-build]` — build and install the egress approver VS Code extension on Windows.
+- `devenv clone <url> [name]` — bare-clone into `worktrees/<name>/.git`, checkout the default branch as a worktree.
+- `devenv worktree add <repo> <branch> [base]` / `rm <repo> <branch> [--force]` / `list [repo]` — manage worktrees under `worktrees/<repo>/`. `rm` also deletes the local branch (`-d`, or `-D` with `--force`).
 
 ## Commit conventions
 
