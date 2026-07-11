@@ -15,17 +15,22 @@ case "${1:-}" in
     install-extension) shift; cmd_install_extension "$@" ;;
     clone)             shift; cmd_clone "$@" ;;
     worktree)          shift; cmd_worktree "$@" ;;
+    container)         shift; cmd_container "$@" ;;
     *)
         echo "usage: devenv <command>"
         echo ""
         echo "commands:"
         echo "  update                          pull the latest devenv repo"
-        echo "  devcontainer [--name <name>]    copy/update .devcontainer in the current project"
+        echo "  devcontainer [--name <name>]    (legacy) copy/update .devcontainer in the current project"
         echo "  install-extension [--skip-build] install the egress approver VS Code extension on Windows"
         echo "  clone <url> [name]              bare-clone a repo into worktrees/<name>/.git + checkout its default branch"
         echo "  worktree add <repo> <branch> [base]   add a worktree at worktrees/<repo>/<branch>"
         echo "  worktree rm <repo> <branch> [--force] remove a worktree"
         echo "  worktree list [repo]            list worktrees for one repo, or all repos"
+        echo "  container up <repo> <branch>    build/start a worktree's dev container stack"
+        echo "  container down <repo> <branch>  stop a worktree's dev container stack"
+        echo "  container attach <repo> <branch> exec a zsh shell in a running dev container"
+        echo "  container list                  list running devenv-managed containers"
         exit 1
         ;;
 esac

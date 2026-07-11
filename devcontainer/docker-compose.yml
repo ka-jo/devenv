@@ -3,7 +3,7 @@ services:
   # requests here and blocks; a human approves/denies via the token-gated
   # /decision endpoint (host-side only — the token is never in the app container).
   approver:
-    container_name: __name__-approver
+    container_name: ${COMPOSE_PROJECT_NAME}-approver
     build:
       context: approver
       dockerfile: Dockerfile
@@ -12,8 +12,8 @@ services:
       # entries on behalf of the host-side extension (which cannot write WSL files
       # directly). The firewall container mounts the same host files read-only;
       # inotify there picks up writes made here because they share the same inode.
-      - ./firewall/allowed_domains.txt:/etc/approver/allowed_domains.txt
-      - ./firewall/denied_domains.txt:/etc/approver/denied_domains.txt
+      - ${WORKSPACE_DIR}/.devcontainer/firewall/allowed_domains.txt:/etc/approver/allowed_domains.txt
+      - ${WORKSPACE_DIR}/.devcontainer/firewall/denied_domains.txt:/etc/approver/denied_domains.txt
     environment:
       # OPTIONAL override. Left empty by default: the approver mints a fresh random
       # token per start and writes it to the tmpfs below, so the secret never lands
@@ -54,13 +54,13 @@ services:
       start_period: 2s
 
   firewall:
-    container_name: __name__-firewall
+    container_name: ${COMPOSE_PROJECT_NAME}-firewall
     build:
       context: firewall
       dockerfile: Dockerfile
     volumes:
-      - ./firewall/allowed_domains.txt:/etc/squid/allowed_domains.txt:ro
-      - ./firewall/denied_domains.txt:/etc/squid/denied_domains.txt:ro
+      - ${WORKSPACE_DIR}/.devcontainer/firewall/allowed_domains.txt:/etc/squid/allowed_domains.txt:ro
+      - ${WORKSPACE_DIR}/.devcontainer/firewall/denied_domains.txt:/etc/squid/denied_domains.txt:ro
     # `external` = real internet egress + the path to the approver; `proxy_net` =
     # the internal-only segment shared with the app container (which reaches Squid
     # here but, having no other network, can reach nothing else directly).
@@ -80,19 +80,19 @@ services:
       start_period: 2s
 
   devcontainer:
-    container_name: __name__-devcontainer
+    container_name: ${COMPOSE_PROJECT_NAME}-devcontainer
     build:
       dockerfile: Dockerfile
     command: sleep infinity
     volumes:
-      - ..:/workspace:cached
+      - ${WORKSPACE_DIR}:/workspace:cached
       # Re-mount the firewall config read-only, overlaying the read-write
       # /workspace mount above. The egress allowlist is a host-controlled trust
       # boundary: a process inside this (sandboxed) container must not be able to
       # widen its own network access by editing allowed_domains.txt. Edit it from
       # the host instead — the firewall sidecar reads the same host file and
       # live-reloads on change.
-      - ./firewall:/workspace/.devcontainer/firewall:ro
+      - ${WORKSPACE_DIR}/.devcontainer/firewall:/workspace/.devcontainer/firewall:ro
       # Mount host's global Claude config and the devenv repo so that
       # ~/.claude/* relative symlinks (created by devenv's scripts/install.sh)
       # resolve inside the container, and edits to claude files propagate
@@ -101,8 +101,10 @@ services:
       - ${HOME}/devenv:/home/ka-jo/devenv
       - ./managed-settings.json:/etc/claude-code/managed-settings.json:ro
       - pnpm-store:/home/ka-jo/.pnpm-store
+      - zsh-history:/home/ka-jo/commandhistory
     working_dir: /workspace
     environment:
+      HISTFILE: /home/ka-jo/commandhistory/.zsh_history
       HTTP_PROXY: http://firewall:3128
       HTTPS_PROXY: http://firewall:3128
       http_proxy: http://firewall:3128
@@ -127,6 +129,9 @@ volumes:
   pnpm-store:
     external: true
     name: shared-pnpm-store
+  zsh-history:
+    external: true
+    name: ka-jo-zsh-history
 
 networks:
   external:

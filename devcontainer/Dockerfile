@@ -38,3 +38,10 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 
 RUN echo 'eval "$(fnm env --use-on-cd --shell zsh)"' >> /home/ka-jo/.zshrc \
  && echo "alias claude='/home/ka-jo/devenv/bin/claude-wrapper'" >> /home/ka-jo/.zshrc
+
+# Dangling until the ${HOME}/devenv bind mount populates the target at runtime.
+RUN ln -sf /home/ka-jo/devenv/bin/devenv /home/ka-jo/.local/bin/devenv
+
+COPY --chown=ka-jo:ka-jo --chmod=755 entrypoint.sh /home/ka-jo/entrypoint.sh
+
+ENTRYPOINT ["/home/ka-jo/entrypoint.sh"]
