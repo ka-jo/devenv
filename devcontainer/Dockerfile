@@ -1,16 +1,40 @@
+# git 2.48.0 isn't in trixie's apt repos; built from source in an isolated
+# stage (see build-git.sh) so its build deps don't land in the final image.
+FROM debian:trixie-slim AS git-builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    ca-certificates \
+    libssl-dev \
+    libcurl4-openssl-dev \
+    zlib1g-dev \
+    libexpat1-dev \
+    gettext \
+    autoconf \
+    pkg-config \
+    cargo \
+    rustc \
+    && rm -rf /var/lib/apt/lists/*
+COPY build-git.sh /tmp/build-git.sh
+RUN /tmp/build-git.sh --prefix /usr/local/git
+
 # debian:trixie-slim = Debian 13 (Trixie)
 FROM debian:trixie-slim
 
-# Install base dependencies
+# Install base dependencies (git's runtime libs, not its build deps)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
-    git \
+    libcurl4 \
+    zlib1g \
     zsh \
     sudo \
     unzip \
     libatomic1 \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=git-builder /usr/local/git /usr/local/git
+ENV PATH="/usr/local/git/bin:${PATH}"
 
 # Create non-root user
 RUN groupadd --gid 1000 ka-jo \
