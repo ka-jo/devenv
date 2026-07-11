@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECTED_DIR="$HOME/devenv"
 CLAUDE_DIR="$HOME/.claude"
 
@@ -49,12 +49,12 @@ link_relative "../devenv/claude/output-styles"  "$CLAUDE_DIR/output-styles"
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
 DEVENV_BIN="$BIN_DIR/devenv"
-if [ -L "$DEVENV_BIN" ] && [ "$(readlink "$DEVENV_BIN")" = "$REPO_DIR/scripts/devenv" ]; then
+if [ -L "$DEVENV_BIN" ] && [ "$(readlink "$DEVENV_BIN")" = "$REPO_DIR/bin/devenv" ]; then
     echo "ok: $DEVENV_BIN"
 else
-    ln -sf "$REPO_DIR/scripts/devenv" "$DEVENV_BIN"
-    chmod +x "$REPO_DIR/scripts/devenv"
-    echo "linked: $DEVENV_BIN -> $REPO_DIR/scripts/devenv"
+    ln -sf "$REPO_DIR/bin/devenv" "$DEVENV_BIN"
+    chmod +x "$REPO_DIR/bin/devenv"
+    echo "linked: $DEVENV_BIN -> $REPO_DIR/bin/devenv"
 fi
 
 # Ensure jq is available for JSON surgery on VS Code settings below.

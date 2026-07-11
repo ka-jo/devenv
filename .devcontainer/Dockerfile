@@ -37,4 +37,4 @@ RUN curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=11.4.0 sh -
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
 RUN echo 'eval "$(fnm env --use-on-cd --shell zsh)"' >> /home/ka-jo/.zshrc \
- && echo "alias claude='/home/ka-jo/devenv/scripts/claude-wrapper'" >> /home/ka-jo/.zshrc
+ && echo "alias claude='/home/ka-jo/devenv/bin/claude-wrapper'" >> /home/ka-jo/.zshrc

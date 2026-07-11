@@ -8,7 +8,7 @@
       "settings": {
         "egressApprover.containerName": "__name__-approver",
         "claudeCode.allowDangerouslySkipPermissions": true,
-        "claudeCode.claudeProcessWrapper": "/home/ka-jo/devenv/scripts/claude-wrapper",
+        "claudeCode.claudeProcessWrapper": "/home/ka-jo/devenv/bin/claude-wrapper",
         "claudeCode.initialPermissionMode": "bypassPermissions",
         "terminal.integrated.defaultProfile.linux": "zsh",
         "terminal.integrated.profiles.linux": {
@@ -46,7 +46,7 @@
   ],
   "onCreateCommand": "sudo chown ka-jo:ka-jo /home/ka-jo/.pnpm-store",
   "postCreateCommand": {
-    "linkDevenv": "ln -sf /home/ka-jo/devenv/scripts/devenv /home/ka-jo/.local/bin/devenv",
+    "linkDevenv": "ln -sf /home/ka-jo/devenv/bin/devenv /home/ka-jo/.local/bin/devenv",
     "installNode": "fnm install",
     "installDeps": "pnpm install"
   },

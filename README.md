@@ -25,19 +25,21 @@ devcontainer/                 # dev container template — copied into projects 
     allowed_domains.txt       #     the egress allowlist (one domain per line; leading "." = subdomains)
     start.sh                  #     launches squid, watches allowed_domains.txt, SIGHUPs on change
     verify.sh                 #     postStart check: allowed domains reachable, others blocked
-scripts/
-  install.sh                  # symlinks claude/* into ~/.claude and installs the `devenv` CLI
-  devenv                      # CLI: `devenv update`, `devenv devcontainer`
+bin/
+  devenv                      # CLI entry point: `devenv update`, `devenv devcontainer`, ...
+  claude-wrapper               # process wrapper referenced by the dev container's claudeCode.claudeProcessWrapper
+lib/                         # one file per devenv subcommand, sourced by bin/devenv
+install.sh                    # symlinks claude/* into ~/.claude and installs the `devenv` CLI
 ```
 
 ## Setting up a new machine
 
-> **The repo must be cloned to `~/devenv`.** `scripts/install.sh` refuses to run from any other location.
+> **The repo must be cloned to `~/devenv`.** `install.sh` refuses to run from any other location.
 
 ```bash
 git clone https://github.com/ka-jo/devenv.git ~/devenv
 cd ~/devenv
-./scripts/install.sh
+./install.sh
 ```
 
 This does two things:
@@ -55,7 +57,7 @@ This does two things:
 
 Each entry is an explicit `link_relative` call in `install.sh`. To add a new top-level config folder, add a line to that script and re-run it. Edits to files inside any of the already-linked folders are picked up live with no re-run needed (the symlink is a directory; new files appear automatically). The script is idempotent.
 
-**2.** Symlinks `scripts/devenv` into `~/.local/bin/devenv` so the CLI is on `$PATH`.
+**2.** Symlinks `bin/devenv` into `~/.local/bin/devenv` so the CLI is on `$PATH`.
 
 Runtime state Claude Code writes into `~/.claude/` itself — `sessions/`, `projects/`, `history.jsonl`, `.credentials.json`, `settings.json`, `cache/`, etc. — is deliberately **not** symlinked. That state stays local to each machine.
 

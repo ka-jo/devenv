@@ -1,0 +1,24 @@
+#!/bin/bash
+set -e
+
+REPO_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
+LIB_DIR="$REPO_DIR/lib"
+
+for lib in "$LIB_DIR"/*.sh; do
+    source "$lib"
+done
+
+case "${1:-}" in
+    update)            cmd_update ;;
+    devcontainer)      shift; cmd_devcontainer "$@" ;;
+    install-extension) shift; cmd_install_extension "$@" ;;
+    *)
+        echo "usage: devenv <command>"
+        echo ""
+        echo "commands:"
+        echo "  update                          pull the latest devenv repo"
+        echo "  devcontainer [--name <name>]    copy/update .devcontainer in the current project"
+        echo "  install-extension [--skip-build] install the egress approver VS Code extension on Windows"
+        exit 1
+        ;;
+esac

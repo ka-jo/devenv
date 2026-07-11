@@ -1,0 +1,58 @@
+cmd_devcontainer() {
+    local SRC_DIR="$REPO_DIR/devcontainer"
+    local DEST_DIR="$(pwd)/.devcontainer"
+    local PRESERVE=(allowed_domains.txt denied_domains.txt devcontainer.json)
+    local EXCLUDE=(
+        '*/node_modules/*'
+        '*/bun.lock'
+    )
+    local CONTAINER_NAME=""
+
+    while [[ "${1:-}" == --* ]]; do
+        case "$1" in
+            --name) CONTAINER_NAME="$2"; shift 2 ;;
+            *) echo "unknown option: $1"; exit 1 ;;
+        esac
+    done
+
+    is_preserved() {
+        local rel="$1"
+        for name in "${PRESERVE[@]}"; do
+            [[ "$rel" == *"$name" ]] && return 0
+        done
+        return 1
+    }
+
+    mkdir -p "$DEST_DIR"
+
+    local find_exclude=()
+    for pattern in "${EXCLUDE[@]}"; do
+        find_exclude+=(-not -path "$pattern")
+    done
+
+    while IFS= read -r -d '' src; do
+        rel="${src#$SRC_DIR/}"
+        dest="$DEST_DIR/$rel"
+        if is_preserved "$rel" && [ -e "$dest" ]; then
+            echo "skip: $dest"
+            continue
+        fi
+        mkdir -p "$(dirname "$dest")"
+        cp "$src" "$dest"
+        echo "copied: $dest"
+    done < <(find "$SRC_DIR" -type f "${find_exclude[@]}" -print0)
+
+    local name="${CONTAINER_NAME:-$(basename "$(pwd)")}"
+
+    sed -i "s/__name__/$name/g" "$DEST_DIR/devcontainer.json" "$DEST_DIR/docker-compose.yml"
+    echo "set name: $name, approver container: ${name}-approver"
+
+    if ! docker volume inspect shared-pnpm-store &>/dev/null; then
+        docker volume create shared-pnpm-store
+        echo "created docker volume: shared-pnpm-store"
+    else
+        echo "ok: docker volume shared-pnpm-store already exists"
+    fi
+
+    echo "done. edit $DEST_DIR/firewall/allowed_domains.txt to control which domains the dev container can reach."
+}
