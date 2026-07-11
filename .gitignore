@@ -15,4 +15,5 @@ devcontainer/.env
 .claude/settings.local.json
 
 # repos cloned via `devenv clone` / `devenv worktree` (machine-local)
-/worktrees/
+/worktrees/*
+!/worktrees/.gitkeep
