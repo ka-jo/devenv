@@ -24,6 +24,6 @@ cmd_clone() {
 
     local default_branch
     default_branch="$(git -C "$target/.git" symbolic-ref --short HEAD)"
-    git -C "$target/.git" worktree add -q "$target/$default_branch" "$default_branch"
+    git -C "$target/.git" worktree add -q --relative-paths "$target/$default_branch" "$default_branch"
     echo "cloned $name -> $target/$default_branch"
 }

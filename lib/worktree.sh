@@ -16,10 +16,10 @@ cmd_worktree_add() {
         || git -C "$bare" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
         # existing local branch, or a remote branch not yet checked out anywhere -
         # `worktree add` DWIMs a tracking branch from origin/<branch> for the latter.
-        git -C "$bare" worktree add "$path" "$branch"
+        git -C "$bare" worktree add --relative-paths "$path" "$branch"
     else
         base="${base:-$(git -C "$bare" symbolic-ref --short HEAD)}"
-        git -C "$bare" worktree add -b "$branch" "$path" "$base"
+        git -C "$bare" worktree add --relative-paths -b "$branch" "$path" "$base"
     fi
     echo "worktree ready: $path"
 }
