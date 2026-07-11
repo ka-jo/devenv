@@ -41,3 +41,5 @@ fix(api): correct rate limit header parsing
 Ref #101
 Ref #108
 ```
+## Forbidden actions
+- Never commit without presenting the commit to me first, even if permission was granted for previous commits
