@@ -11,21 +11,18 @@ Full-stack solo developer. Stack: TypeScript + Vue (frontend), C# / .NET (backen
 
 ## Commit conventions
 
-Use [Conventional Commits](https://www.conventionalcommits.org/). Format:
-
-```
-<type>(<scope>): <description>
-
-[optional body]
-
-[optional footers]
-```
+[Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <description>`
 
 **Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`, `ci`, `build`, `revert`
 
-**Scope:** required if the project has documented scopes, otherwise it is optional; use the affected module, package, or area (e.g. `feat(auth): ...`).
+**Scope:** required if the project documents scopes; otherwise optional — affected module/package/area.
 
-**Issue references:** when a commit relates to a tracked issue, add a `Ref` footer. Never use state-changing keywords (`Closes`, `Resolves`, `Fixes`).
+**Body:** Default to none; most commits don't need one. Include only for breaking changes, a non-obvious "why", or a revert (explain why prior code failed). When included:
+- Explain business logic/constraints, not the diff (reviewer already sees the code)
+- Contrast old vs. new behavior
+- Present, imperative tense ("fix", not "fixed")
+
+**Refs:** `Ref #N` footer per related issue — never `Closes`/`Resolves`/`Fixes`. Multiple issues: one `Ref` per line.
 
 ```
 feat(auth): add OAuth2 login flow
@@ -33,13 +30,7 @@ feat(auth): add OAuth2 login flow
 Ref #42
 ```
 
-Multiple issues: one `Ref` per line.
+**Approval:** present the exact message and wait for my explicit approval before running `git commit` — every time, no matter what was approved previously.
 
-```
-fix(api): correct rate limit header parsing
-
-Ref #101
-Ref #108
-```
 ## Forbidden actions
-- Never commit without presenting the commit to me first, even if permission was granted for previous commits
+- Never run `git commit` until I explicitly approve the message. Presenting it isn't approval, and approval never carries over to the next commit.
