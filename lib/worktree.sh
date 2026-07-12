@@ -1,3 +1,17 @@
+# Emits "repo\tbranch" for every worktree across every repo.
+_iter_worktrees() {
+    local bare repo path branch
+    for bare in "$WORKTREES_DIR"/*/.git; do
+        [[ -d "$bare" ]] || continue
+        repo="$(basename "$(dirname "$bare")")"
+        while IFS= read -r path; do
+            [[ -d "$path" && "$path" != "$WORKTREES_DIR/$repo" ]] || continue
+            branch="${path#"$WORKTREES_DIR/$repo/"}"
+            printf '%s\t%s\n' "$repo" "$branch"
+        done < <(git -C "$bare" worktree list --porcelain | awk '/^worktree /{print $2}')
+    done
+}
+
 cmd_worktree_add() {
     local repo="${1:-}" branch="${2:-}" base="${3:-}"
     if [[ -z "$repo" || -z "$branch" ]]; then
@@ -25,18 +39,14 @@ cmd_worktree_add() {
 }
 
 cmd_worktree_rm() {
-    local repo="${1:-}" branch="${2:-}"
-    shift 2 2>/dev/null || true
-    local force=0
-    while [[ "${1:-}" == --* ]]; do
-        case "$1" in
-            --force) force=1; shift ;;
-            *) echo "unknown option: $1"; exit 1 ;;
-        esac
+    local force=0 args=()
+    for a in "$@"; do
+        if [[ "$a" == "--force" ]]; then force=1; else args+=("$a"); fi
     done
+    local repo="${args[0]:-}" branch="${args[1]:-}"
     if [[ -z "$repo" || -z "$branch" ]]; then
-        echo "usage: devenv worktree rm <repo> <branch> [--force]"
-        exit 1
+        _pick_worktree_any
+        repo="$PICK_REPO"; branch="$PICK_BRANCH"
     fi
 
     local bare="$WORKTREES_DIR/$repo/.git"

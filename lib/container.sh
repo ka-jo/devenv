@@ -15,6 +15,10 @@ _container_ensure_volume() {
     fi
 }
 
+_compose_project_name() {
+    printf '%s-%s' "$1" "$(printf '%s' "$2" | tr '[:upper:]/' '[:lower:]-' | tr -cs 'a-z0-9-' '-')"
+}
+
 # Sets globals: CT_PATH (worktree checkout path), CT_PN (compose project name)
 _container_resolve() {
     local repo="$1" branch="$2"
@@ -30,7 +34,7 @@ _container_resolve() {
         exit 1
     fi
 
-    CT_PN="${repo}-$(printf '%s' "$branch" | tr '[:upper:]/' '[:lower:]-' | tr -cs 'a-z0-9-' '-')"
+    CT_PN="$(_compose_project_name "$repo" "$branch")"
 }
 
 _container_write_env() {
@@ -87,7 +91,13 @@ _shared_maybe_down() {
 }
 
 cmd_container_up() {
-    _container_resolve "${1:-}" "${2:-}"
+    local repo="${1:-}" branch="${2:-}"
+    if [[ -z "$repo" || -z "$branch" ]]; then
+        _pick_worktree_any
+        repo="$PICK_REPO"; branch="$PICK_BRANCH"
+    fi
+
+    _container_resolve "$repo" "$branch"
     _shared_ensure_up
     _shared_wait_healthy
     _container_write_env
@@ -98,7 +108,13 @@ cmd_container_up() {
 }
 
 cmd_container_down() {
-    _container_resolve "${1:-}" "${2:-}"
+    local repo="${1:-}" branch="${2:-}"
+    if [[ -z "$repo" || -z "$branch" ]]; then
+        _pick_worktree_running
+        repo="$PICK_REPO"; branch="$PICK_BRANCH"
+    fi
+
+    _container_resolve "$repo" "$branch"
     _container_write_env
     _container_compose down
     _shared_maybe_down
@@ -106,7 +122,13 @@ cmd_container_down() {
 }
 
 cmd_container_attach() {
-    _container_resolve "${1:-}" "${2:-}"
+    local repo="${1:-}" branch="${2:-}"
+    if [[ -z "$repo" || -z "$branch" ]]; then
+        _pick_worktree_running
+        repo="$PICK_REPO"; branch="$PICK_BRANCH"
+    fi
+
+    _container_resolve "$repo" "$branch"
     _container_write_env
     _container_compose exec devcontainer zsh
 }
@@ -114,16 +136,10 @@ cmd_container_attach() {
 cmd_container_list() {
     docker ps -a --filter "label=com.docker.compose.project=$SHARED_PN" --format "$SHARED_PN	{{.Names}}	{{.Status}}"
     local repo branch pn
-    for bare in "$WORKTREES_DIR"/*/.git; do
-        [[ -d "$bare" ]] || continue
-        repo="$(basename "$(dirname "$bare")")"
-        while IFS= read -r path; do
-            [[ -d "$path" && "$path" != "$WORKTREES_DIR/$repo" ]] || continue
-            branch="${path#"$WORKTREES_DIR/$repo/"}"
-            pn="${repo}-$(printf '%s' "$branch" | tr '[:upper:]/' '[:lower:]-' | tr -cs 'a-z0-9-' '-')"
-            docker ps -a --filter "label=com.docker.compose.project=$pn" --format "$pn	{{.Names}}	{{.Status}}"
-        done < <(git -C "$bare" worktree list --porcelain | awk '/^worktree /{print $2}')
-    done | sort
+    while IFS=$'\t' read -r repo branch; do
+        pn="$(_compose_project_name "$repo" "$branch")"
+        docker ps -a --filter "label=com.docker.compose.project=$pn" --format "$pn	{{.Names}}	{{.Status}}"
+    done < <(_iter_worktrees) | sort
 }
 
 cmd_container() {
