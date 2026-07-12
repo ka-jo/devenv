@@ -1,7 +1,7 @@
 .DS_Store
 node_modules/
-devcontainer/approver/package-lock.json
-devcontainer/approver/bun.lock
+devcontainer/infra/approver/package-lock.json
+devcontainer/infra/approver/bun.lock
 *.tgz
 dist/
 
@@ -9,6 +9,11 @@ dist/
 # so Docker Compose auto-loads it for ${APPROVER_TOKEN} substitution.
 .devcontainer/.env
 devcontainer/.env
+
+# Live shared allowlist, seeded once from *.default (see lib/container.sh
+# _shared_seed_firewall). Edit these, not the .default templates.
+devcontainer/infra/firewall/allowed_domains.txt
+devcontainer/infra/firewall/denied_domains.txt
 
 # Claude Code runtime state (machine-local, never committed)
 .claude/worktrees/

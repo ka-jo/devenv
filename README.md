@@ -3,7 +3,7 @@
 My personal development environment configuration. Two purposes:
 
 1. **Share Claude Code config across machines** by symlinking `claude/` into `~/.claude/`.
-2. **Provide a shared dev container setup** (sandboxed via a Squid egress firewall) that any project can drop in.
+2. **Provide a shared dev container setup** (sandboxed via a Squid egress firewall) for every worktree-managed project.
 
 ## Layout
 
@@ -15,18 +15,21 @@ claude/                       # global Claude Code config — symlinked into ~/.
   agents/                     #   custom subagents
   commands/                   #   custom slash commands
   output-styles/              #   custom output styles
-devcontainer/                 # dev container template — copied into projects by `devenv devcontainer`
-  devcontainer.json           #   VS Code dev container entrypoint
-  docker-compose.yml          #   app container + Squid firewall sidecar on an internal network
+devcontainer/                 # dev container base — referenced directly by `devenv container`, never copied
+  docker-compose.yml          #   the app service only, joins the shared proxy_net (below) as its sole network
   Dockerfile                  #   Debian Trixie base: zsh + oh-my-zsh, fnm, pnpm, Claude Code
-  firewall/                   #   Squid sidecar image with default-deny egress allowlist
-    Dockerfile                #     Ubuntu + squid + inotify-tools (for live allowlist reload)
-    squid.conf                #     default-deny config; allowlist via dstdomain ACL
-    allowed_domains.txt       #     the egress allowlist (one domain per line; leading "." = subdomains)
-    start.sh                  #     launches squid, watches allowed_domains.txt, SIGHUPs on change
-    verify.sh                 #     postStart check: allowed domains reachable, others blocked
+  infra/                      #   Squid firewall + egress approver — ONE shared instance for all worktrees
+    docker-compose.yml        #     approver + firewall services (see lib/container.sh _shared_*)
+    approver/                 #     Bun/TypeScript egress approval broker (see approver/PROTOCOL.md)
+    firewall/                 #     Squid sidecar image with default-deny egress allowlist
+      Dockerfile               #       Ubuntu + squid + inotify-tools (for live allowlist reload)
+      squid.conf                #      default-deny config; allowlist via dstdomain ACL
+      allowed_domains.txt.default  #   seed template (live allowlist: allowed_domains.txt, gitignored)
+      start.sh                  #      launches squid, watches allowed_domains.txt, SIGHUPs on change
+      verify.sh                 #      check: allowed domains reachable, others blocked
+vsc-extension/                 # VS Code extension: host-side UI for approving/denying egress requests
 bin/
-  devenv                      # CLI entry point: `devenv update`, `devenv devcontainer`, ...
+  devenv                      # CLI entry point: `devenv update`, `devenv container`, ...
   claude-wrapper               # process wrapper referenced by the dev container's claudeCode.claudeProcessWrapper
 lib/                         # one file per devenv subcommand, sourced by bin/devenv
 install.sh                    # symlinks claude/* into ~/.claude and installs the `devenv` CLI
@@ -72,12 +75,16 @@ Hard-requiring `~/devenv` keeps `install.sh` simple (no auto-healing symlink lay
 
 ```
 devenv update                                  pull the latest devenv repo
-devenv devcontainer [--name <name>]            copy/update .devcontainer in the current project
-devenv install-extension [--skip-build]        install the egress approver VS Code extension on Windows
 devenv clone <url> [name]                      bare-clone a repo into worktrees/<name>/.git + checkout its default branch
 devenv worktree add <repo> <branch> [base]     add a worktree at worktrees/<repo>/<branch>
 devenv worktree rm <repo> <branch> [--force]   remove a worktree and delete its local branch
 devenv worktree list [repo]                    list worktrees for one repo, or all repos
+devenv container up <repo> <branch>            build/start a worktree's dev container (and the shared firewall stack, if needed)
+devenv container down <repo> <branch>          stop a worktree's dev container (and the shared firewall stack, if it was the last one)
+devenv container attach <repo> <branch>        exec a zsh shell in a running dev container
+devenv container list                          list running devenv-managed containers, including the shared stack
+devenv install-extension [--skip-build]        install the egress approver VS Code extension on Windows
+devenv devcontainer [--name <name>]            (legacy, currently unmaintained — see below)
 ```
 
 ### Working with git worktrees
@@ -104,27 +111,47 @@ devenv worktree rm my-repo feature/my-branch           # removes the worktree + 
 devenv worktree rm my-repo feature/my-branch --force   # force-removes a dirty worktree, force-deletes an unmerged branch (-D)
 ```
 
-### Adding the dev container to a new project
+### Running a worktree's dev container
 
-From the root of any project:
+This is the primary path, for any repo managed via `devenv clone`/`devenv worktree`:
 
 ```bash
-devenv devcontainer            # or: devenv devcontainer --name my-project
+devenv container up my-repo feature/my-branch      # build + start
+devenv container attach my-repo feature/my-branch  # exec a zsh shell
+devenv container down my-repo feature/my-branch    # stop
+devenv container list                              # see what's running, across all worktrees
 ```
 
-This copies the contents of `devcontainer/` into `.devcontainer/` in the project. Re-running it pulls in template updates, but preserves project-local edits to `devcontainer.json` and `firewall/allowed_domains.txt` (never overwritten if they already exist). It also creates the shared `shared-pnpm-store` Docker volume on first run. `--name <name>` rewrites the `"name"` field in `devcontainer.json` (otherwise it stays `devcontainer`).
+`up` references `devcontainer/docker-compose.yml` directly (nothing is copied into the worktree) and regenerates `<worktree>/.devenv` (`WORKSPACE_DIR`, `COMPOSE_PROJECT_NAME`) each run — a flat dotfile at the worktree root, deliberately not named `.devcontainer/` since that name is reserved for actual devcontainer.json-style tooling. There's no `devcontainer.json` and VS Code doesn't own the container lifecycle here — start/stop it with the CLI, and if you want VS Code attached, use **Attach to Running Container** against `${COMPOSE_PROJECT_NAME}-devcontainer` (i.e. `<repo>-<branch>-devcontainer`) once it's up.
 
-Then open the folder in VS Code and **Reopen in Container**. On creation the container runs `fnm install` (Node version from the project's `.nvmrc`/`.node-version`) and `pnpm install`; on every start it runs `firewall/verify.sh` to confirm the allowlist is enforced (allowed domains reachable, others blocked) — failures print a warning but don't block the container.
+Each worktree's container:
 
-The template:
-
-- Runs your dev container on an `internal: true` Docker network — **no direct external access**. The Squid firewall sidecar is the only egress path, reached via `HTTP(S)_PROXY` env vars (and `NODE_USE_ENV_PROXY=1` so Node's http/https honor them). The app container won't start until the firewall passes its health check.
+- Joins a **shared** `internal: true` Docker network (`devenv-shared_proxy_net`) — **no direct external access**. The only egress path is the shared Squid firewall, reached via `HTTP(S)_PROXY` env vars (and `NODE_USE_ENV_PROXY=1` so Node's http/https honor them).
 - Builds on **Debian Trixie** with `zsh` + oh-my-zsh, **`fnm`** (Node version manager), `pnpm`, and Claude Code preinstalled. Runs as the non-root user **`ka-jo`** with passwordless sudo.
 - Bind-mounts your host's `~/.claude` and `~/devenv` into the container, so Claude config and skills are shared live and edits made in either place are visible in both. Symlinks `devenv` onto `PATH` inside the container too.
 - Shares a `pnpm` store across all dev containers via the external `shared-pnpm-store` Docker volume, so package downloads are cached once per host. Shell history persists in a named `ka-jo-zsh-history` volume.
 
+Isolation between concurrently-running worktrees comes entirely from the Docker Compose **project name** (`<repo>-<branch>`) — each worktree gets its own container and its own project namespace, but they all share one firewall.
+
+### The shared firewall + approver stack
+
+Squid and the egress-approval broker (`devcontainer/infra/approver/`) run as **one instance total**, shared by every running worktree — not one pair per worktree. `devenv container up` starts this shared stack automatically if it isn't already running (building images and seeding the allowlist on first-ever use) and waits for it to be healthy before starting your worktree's container. `devenv container down` tears the shared stack down again once your worktree was the last one attached to it — that check is derived live from Docker network state, not a manually-tracked counter, so it can't drift out of sync if a container crashes.
+
+The approver is published only to host loopback (`127.0.0.1`, ephemeral port — discover it with `docker port devenv-shared-approver 3129/tcp`) and sits on a network the sandboxed app containers can't reach at all, so it — not a token alone — is the real trust boundary between "an app container asked for network access" and "a human granted it." The **egress approver VS Code extension** (`devenv install-extension`) is the host-side UI for that approval flow; see `vsc-extension/README.md` and `devcontainer/infra/approver/PROTOCOL.md` for the wire protocol.
+
 ### Controlling egress
 
-Edit `.devcontainer/firewall/allowed_domains.txt` to control which domains the container can reach (one domain per line; a leading `.` matches subdomains, e.g. `.github.com`). Changes are picked up **live** — the firewall watches the file and reconfigures Squid on save, no rebuild needed. The starting allowlist covers Anthropic/Claude, GitHub, the npm registry, the VS Code marketplace, and `nodejs.org`.
+The allowlist is **global**, shared by every worktree (not per-worktree) — this is a deliberately constrained first cut; per-worktree allowlists are a possible future enhancement. Edit it at:
 
-> **Edit the allowlist from the host, not from inside the dev container.** The allowlist is a host-controlled trust boundary: it would defeat the firewall if a process inside the sandbox (e.g. an agent running with skipped permissions) could widen its own egress. The whole `firewall/` directory is re-mounted **read-only** into the dev container (over the read-write `/workspace` mount), so attempts to edit it from inside fail with a read-only-filesystem error. The firewall sidecar reads the same host file, so host-side edits still live-reload.
+```
+devcontainer/infra/firewall/allowed_domains.txt
+devcontainer/infra/firewall/denied_domains.txt
+```
+
+One domain per line; a leading `.` matches subdomains, e.g. `.github.com`. Changes are picked up **live** — the firewall watches the files and reconfigures Squid on save, no rebuild needed. These files are gitignored and seeded once, ever, from the tracked `*.default` templates in the same directory (skip-if-exists) — edit the seeded copy, not the `.default` templates, to change what any worktree can reach.
+
+> **Known gap (TODO):** these files live inside `~/devenv`, which every dev container bind-mounts **read-write** at `/home/ka-jo/devenv` (for the `~/.claude` symlink trick). That means a sandboxed process inside the container can currently reach its own allowlist through that mount — this isn't a real trust boundary yet. A fix (e.g. a read-only remount, or moving the live files back outside the repo) is intentionally deferred rather than solved here.
+
+### `devenv devcontainer` (legacy, currently unmaintained)
+
+For a project **not** managed as a `devenv worktree` checkout, `devenv devcontainer` copies `devcontainer/` into a project-local `.devcontainer/` instead of using `devenv container up`. It predates the switch to the CLI-managed container lifecycle and the shared firewall stack, and has not been kept in sync with either — it still expects a `devcontainer.json` that no longer exists in `devcontainer/`, and the `docker-compose.yml` it copies is now the app-only service (no bundled firewall/approver). Treat it as broken until someone specifically revives it; per `CLAUDE.md`, new work should extend `devcontainer/docker-compose.yml` + `lib/container.sh` instead of this path.

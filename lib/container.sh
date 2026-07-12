@@ -1,3 +1,12 @@
+SHARED_PN="devenv-shared"
+SHARED_PROXY_NET="devenv-shared_proxy_net"
+# TODO: this puts the live allowlist inside ~/devenv, which every app
+# container bind-mounts read-write at /home/ka-jo/devenv (for the ~/.claude
+# symlink trick) — a sandboxed process can currently reach its own allowlist
+# through that mount. Revisit (e.g. a read-only remount, or moving the file
+# back out of the repo) before relying on this as a real trust boundary.
+SHARED_FIREWALL_DIR="$REPO_DIR/devcontainer/infra/firewall"
+
 _container_ensure_volume() {
     local name="$1"
     if ! docker volume inspect "$name" &>/dev/null; then
@@ -21,36 +30,66 @@ _container_resolve() {
         exit 1
     fi
 
-    # info/exclude lives in the bare repo's common git dir, shared by every
-    # worktree of $repo, so this covers all branches with a single write.
-    local exclude="$bare/info/exclude"
-    mkdir -p "$(dirname "$exclude")"
-    grep -qxF '.devcontainer/' "$exclude" 2>/dev/null || echo '.devcontainer/' >> "$exclude"
-
     CT_PN="${repo}-$(printf '%s' "$branch" | tr '[:upper:]/' '[:lower:]-' | tr -cs 'a-z0-9-' '-')"
 }
 
-_container_seed_firewall() {
-    local dir="$CT_PATH/.devcontainer/firewall"
-    mkdir -p "$dir"
-    [[ -e "$dir/allowed_domains.txt" ]] || cp "$REPO_DIR/devcontainer/firewall/allowed_domains.txt.default" "$dir/allowed_domains.txt"
-    [[ -e "$dir/denied_domains.txt" ]] || cp "$REPO_DIR/devcontainer/firewall/denied_domains.txt.default" "$dir/denied_domains.txt"
-}
-
 _container_write_env() {
-    cat > "$CT_PATH/.devcontainer/.env" <<EOF
+    cat > "$CT_PATH/.devenv" <<EOF
 WORKSPACE_DIR=$CT_PATH
 COMPOSE_PROJECT_NAME=$CT_PN
 EOF
 }
 
 _container_compose() {
-    docker compose -p "$CT_PN" --env-file "$CT_PATH/.devcontainer/.env" -f "$REPO_DIR/devcontainer/docker-compose.yml" "$@"
+    docker compose -p "$CT_PN" --env-file "$CT_PATH/.devenv" -f "$REPO_DIR/devcontainer/docker-compose.yml" "$@"
+}
+
+# --- shared firewall+approver stack (one instance total, not per-worktree) ---
+
+_shared_seed_firewall() {
+    mkdir -p "$SHARED_FIREWALL_DIR"
+    [[ -e "$SHARED_FIREWALL_DIR/allowed_domains.txt" ]] || cp "$SHARED_FIREWALL_DIR/allowed_domains.txt.default" "$SHARED_FIREWALL_DIR/allowed_domains.txt"
+    [[ -e "$SHARED_FIREWALL_DIR/denied_domains.txt" ]] || cp "$SHARED_FIREWALL_DIR/denied_domains.txt.default" "$SHARED_FIREWALL_DIR/denied_domains.txt"
+}
+
+_shared_compose() {
+    SHARED_FIREWALL_DIR="$SHARED_FIREWALL_DIR" COMPOSE_PROJECT_NAME="$SHARED_PN" \
+        docker compose -p "$SHARED_PN" -f "$REPO_DIR/devcontainer/infra/docker-compose.yml" "$@"
+}
+
+_shared_ensure_up() {
+    _shared_seed_firewall
+    _shared_compose up -d --build
+}
+
+_shared_wait_healthy() {
+    local status
+    for _ in $(seq 1 30); do
+        status="$(docker inspect -f '{{.State.Health.Status}}' "${SHARED_PN}-firewall" 2>/dev/null || true)"
+        [[ "$status" == "healthy" ]] && return 0
+        sleep 1
+    done
+    echo "error: shared firewall (${SHARED_PN}-firewall) did not become healthy" >&2
+    exit 1
+}
+
+# Tear down the shared stack once no worktree app container is left on its
+# network. Derived live from Docker state (not a counter file) so it can't
+# drift out of sync on a crash.
+_shared_maybe_down() {
+    local remaining
+    # The firewall itself is always attached to proxy_net, so exclude it —
+    # "remaining" here means worktree app containers still attached.
+    remaining="$(docker network inspect "$SHARED_PROXY_NET" --format '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}' 2>/dev/null | grep -v "^\$" | grep -vc "^${SHARED_PN}-firewall\$" || true)"
+    if [[ "${remaining:-0}" -eq 0 ]]; then
+        _shared_compose down
+    fi
 }
 
 cmd_container_up() {
     _container_resolve "${1:-}" "${2:-}"
-    _container_seed_firewall
+    _shared_ensure_up
+    _shared_wait_healthy
     _container_write_env
     _container_ensure_volume shared-pnpm-store
     _container_ensure_volume ka-jo-zsh-history
@@ -62,6 +101,7 @@ cmd_container_down() {
     _container_resolve "${1:-}" "${2:-}"
     _container_write_env
     _container_compose down
+    _shared_maybe_down
     echo "down: $CT_PN"
 }
 
@@ -72,6 +112,7 @@ cmd_container_attach() {
 }
 
 cmd_container_list() {
+    docker ps -a --filter "label=com.docker.compose.project=$SHARED_PN" --format "$SHARED_PN	{{.Names}}	{{.Status}}"
     local repo branch pn
     for bare in "$WORKTREES_DIR"/*/.git; do
         [[ -d "$bare" ]] || continue

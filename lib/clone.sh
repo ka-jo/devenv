@@ -22,6 +22,13 @@ cmd_clone() {
     git -C "$target/.git" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
     git -C "$target/.git" fetch -q origin
 
+    # info/exclude lives in the bare repo's common git dir, shared by every
+    # worktree of this repo, so one write here covers every branch checked
+    # out under it (devenv container up/down/attach generates .devenv per
+    # worktree; keep it out of git status without a tracked .gitignore).
+    mkdir -p "$target/.git/info"
+    echo '.devenv' >> "$target/.git/info/exclude"
+
     local default_branch
     default_branch="$(git -C "$target/.git" symbolic-ref --short HEAD)"
     git -C "$target/.git" worktree add -q --relative-paths "$target/$default_branch" "$default_branch"

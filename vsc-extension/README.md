@@ -4,7 +4,7 @@ Host-side approval UI for the dev container egress firewall. Consumes the approv
 sidecar's `GET /requests` SSE stream and (eventually) lets you allow/deny pending
 egress requests via `PATCH /requests/{id}`.
 
-See the contract in `../devcontainer/approver/PROTOCOL.md`.
+See the contract in `../devcontainer/infra/approver/PROTOCOL.md`.
 
 ## Why it runs on the host
 
@@ -31,7 +31,7 @@ Run the approver standalone with a pinned token, simulate the proxy helper with
 `curl`, and point the extension at it:
 
 ```sh
-# in devcontainer/approver
+# in devcontainer/infra/approver
 APPROVER_TOKEN=dev bun server.ts
 
 # simulate a pending request (blocks until decided)

@@ -1,0 +1,101 @@
+services:
+  # Egress approval broker. Squid's external_acl helper submits non-allowlisted
+  # requests here and blocks; a human approves/denies via the token-gated
+  # /decision endpoint (host-side only — the token is never in any app container).
+  #
+  # This stack is shared by every running worktree's app container (one Squid,
+  # one approver, total — not one per worktree). Lifecycle is managed by
+  # lib/container.sh (_shared_ensure_up / _shared_maybe_down), auto-started on
+  # the first `devenv container up` and torn down when the last worktree's app
+  # container leaves proxy_net. Compose project name is the fixed `devenv-shared`
+  # (passed via -p), not derived from any worktree.
+  approver:
+    container_name: ${COMPOSE_PROJECT_NAME}-approver
+    build:
+      context: approver
+      dockerfile: Dockerfile
+    volumes:
+      # Writable mounts of the shared domain lists so the approver can append
+      # entries on behalf of the host-side extension (which cannot write WSL files
+      # directly). The firewall container mounts the same host files read-only;
+      # inotify there picks up writes made here because they share the same inode.
+      # TODO: SHARED_FIREWALL_DIR (lib/container.sh) currently lives inside the
+      # repo (devcontainer/infra/firewall/), which every app container bind-mounts
+      # read-write at ~/devenv — a sandboxed process can currently reach its own
+      # allowlist through that mount. Not a real trust boundary yet; revisit.
+      - ${SHARED_FIREWALL_DIR}/allowed_domains.txt:/etc/approver/allowed_domains.txt
+      - ${SHARED_FIREWALL_DIR}/denied_domains.txt:/etc/approver/denied_domains.txt
+    environment:
+      # OPTIONAL override. Left empty by default: the approver mints a fresh random
+      # token per start and writes it to the tmpfs below, so the secret never lands
+      # in a host file any app container can read.
+      #   docker compose exec approver cat /run/approver/token
+      # Set this (via devcontainer/shared.env) only to pin a token for testing —
+      # doing so reintroduces that file as a readable surface, so prefer generated.
+      # Network segmentation (below) is the primary control keeping app containers
+      # away from the approver; the token is defense-in-depth on the one unavoidable
+      # surface — the host-published /decision port.
+      APPROVER_TOKEN: ${APPROVER_TOKEN:-}
+    # In-RAM mount for the generated token. Wiped on container stop; never on disk.
+    tmpfs:
+      - /run/approver
+    # Published to the host loopback so the host-side decider (VS Code extension;
+    # host curl) can reach the decision endpoint. The approver sits on `external`
+    # ONLY — deliberately NOT on proxy_net — so sandboxed app containers have no
+    # network route to it whatsoever (can't submit spurious prompts, can't read
+    # /pending, can't hit /decision). The firewall's helper reaches it over
+    # `external`; the host reaches it via the published port. There is exactly one
+    # approver now, so the port could be fixed, but it's kept ephemeral (no
+    # fixed left-hand side) for consistency with the discovery mechanism
+    # (`docker port <name> 3129/tcp`) already used by the VS Code extension.
+    ports:
+      - "127.0.0.1::3129"
+    networks:
+      - external
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3129/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
+
+  firewall:
+    container_name: ${COMPOSE_PROJECT_NAME}-firewall
+    build:
+      context: firewall
+      dockerfile: Dockerfile
+    volumes:
+      - ${SHARED_FIREWALL_DIR}/allowed_domains.txt:/etc/squid/allowed_domains.txt:ro
+      - ${SHARED_FIREWALL_DIR}/denied_domains.txt:/etc/squid/denied_domains.txt:ro
+    # `external` = real internet egress + the path to the approver; `proxy_net` =
+    # the internal-only segment shared with every worktree's app container (each
+    # reaches Squid here but, having no other network, can reach nothing else
+    # directly).
+    networks:
+      - external
+      - proxy_net
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      approver:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/3128"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
+
+networks:
+  # Fixed names so per-worktree devcontainer/docker-compose.yml can reference
+  # proxy_net as an external network. Don't rename without updating both files.
+  external:
+    name: devenv-shared_external
+    driver: bridge
+  # Internal-only segment shared by Squid and every worktree's app container.
+  # `internal: true` means no direct outbound; the only escape is via the proxy.
+  proxy_net:
+    name: devenv-shared_proxy_net
+    driver: bridge
+    internal: true
