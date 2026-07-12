@@ -37,6 +37,20 @@ _container_resolve() {
     CT_PN="$(_compose_project_name "$repo" "$branch")"
 }
 
+# Opens VS Code attached to the running container for the worktree last
+# resolved via _container_resolve (uses CT_PN). No devcontainer.json is
+# involved — this is a plain "attached-container" URI.
+_open_vscode() {
+    command -v code &>/dev/null || {
+        echo "error: 'code' CLI not found on PATH (run 'Shell Command: Install code command in PATH' from VS Code)"
+        exit 1
+    }
+    local container_name="${CT_PN}-devcontainer"
+    local hex
+    hex="$(printf '%s' "$container_name" | od -An -tx1 | tr -d ' \n')"
+    code --folder-uri "vscode-remote://attached-container+${hex}/workspace"
+}
+
 _container_write_env() {
     cat > "$CT_PATH/.devenv" <<EOF
 WORKSPACE_DIR=$CT_PATH
@@ -91,7 +105,11 @@ _shared_maybe_down() {
 }
 
 cmd_container_up() {
-    local repo="${1:-}" branch="${2:-}"
+    local code=0 args=()
+    for a in "$@"; do
+        if [[ "$a" == "--code" ]]; then code=1; else args+=("$a"); fi
+    done
+    local repo="${args[0]:-}" branch="${args[1]:-}"
     if [[ -z "$repo" || -z "$branch" ]]; then
         _pick_worktree_any
         repo="$PICK_REPO"; branch="$PICK_BRANCH"
@@ -105,6 +123,7 @@ cmd_container_up() {
     _container_ensure_volume ka-jo-zsh-history
     _container_compose up -d --build
     echo "up: $CT_PN"
+    [[ "$code" -eq 1 ]] && _open_vscode
 }
 
 cmd_container_down() {
@@ -122,7 +141,11 @@ cmd_container_down() {
 }
 
 cmd_container_attach() {
-    local repo="${1:-}" branch="${2:-}"
+    local code=0 args=()
+    for a in "$@"; do
+        if [[ "$a" == "--code" ]]; then code=1; else args+=("$a"); fi
+    done
+    local repo="${args[0]:-}" branch="${args[1]:-}"
     if [[ -z "$repo" || -z "$branch" ]]; then
         _pick_worktree_running
         repo="$PICK_REPO"; branch="$PICK_BRANCH"
@@ -130,7 +153,11 @@ cmd_container_attach() {
 
     _container_resolve "$repo" "$branch"
     _container_write_env
-    _container_compose exec devcontainer zsh
+    if [[ "$code" -eq 1 ]]; then
+        _open_vscode
+    else
+        _container_compose exec devcontainer zsh
+    fi
 }
 
 cmd_container_list() {

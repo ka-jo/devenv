@@ -27,9 +27,9 @@ case "${1:-}" in
         echo "  worktree add <repo> <branch> [base]   add a worktree at worktrees/<repo>/<branch>"
         echo "  worktree rm [<repo> <branch>] [--force] remove a worktree (fzf picker if omitted)"
         echo "  worktree list [repo]            list worktrees for one repo, or all repos"
-        echo "  container up [<repo> <branch>]    build/start a worktree's dev container stack (fzf picker if omitted)"
-        echo "  container down [<repo> <branch>]  stop a worktree's dev container stack (fzf picker if omitted)"
-        echo "  container attach [<repo> <branch>] exec a zsh shell in a running dev container (fzf picker if omitted)"
+        echo "  container up [<repo> <branch>] [--code]    build/start a worktree's dev container stack (fzf picker if omitted; --code opens VS Code attached)"
+        echo "  container down [<repo> <branch>]           stop a worktree's dev container stack (fzf picker if omitted)"
+        echo "  container attach [<repo> <branch>] [--code] exec a zsh shell in a running dev container (fzf picker if omitted; --code opens VS Code instead of a shell)"
         echo "  container list                  list running devenv-managed containers"
         exit 1
         ;;
