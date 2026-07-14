@@ -17,7 +17,7 @@ Full-stack solo developer. Stack: TypeScript + Vue (frontend), C# / .NET (backen
 
 **Scope:** required if the project documents scopes; otherwise optional — affected module/package/area.
 
-**Body:** Default to none; most commits don't need one. Include only for breaking changes, a non-obvious "why", or a revert (explain why prior code failed). When included:
+**Body:** Default to no commit body; most commits don't need one. Do not create a commit body without a good reason. Include only for breaking changes, a non-obvious "why", or a revert (explain why prior code failed). When included:
 - Explain business logic/constraints, not the diff (reviewer already sees the code)
 - Contrast old vs. new behavior
 - Present, imperative tense ("fix", not "fixed")
