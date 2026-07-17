@@ -10,7 +10,9 @@ Personal dev environment config with two payloads:
 2. **`devcontainer/`** — a shared base `docker-compose.yml`, referenced directly (via `-f`, never copied) by `devenv container up/down/attach` for every `worktrees/<repo>/<branch>` checkout. Debian-Trixie app container (runs as non-root user `ka-jo`; zsh + fnm + pnpm + Claude Code). Its sole network is `proxy_net`, an `internal: true` Docker network it doesn't own. There is no `devcontainer.json` and VS Code does not own the container lifecycle — containers are started/stopped via the `devenv container` CLI and VS Code, if used, attaches to an already-running container.
    `devcontainer/infra/` holds the Squid egress firewall + egress-approval broker (`docker-compose.yml`, `firewall/`, `approver/`), run as **one shared instance for every running worktree** (not one pair per worktree), fixed Compose project `devenv-shared`, fixed networks `devenv-shared_external`/`devenv-shared_proxy_net`. Default-deny allowlist is global (single `allowed_domains.txt`/`denied_domains.txt`, not per-worktree), seeded once ever into `devcontainer/infra/firewall/{allowed,denied}_domains.txt` (gitignored) from the tracked `*.default` templates in the same directory. **Known gap (TODO):** every app container bind-mounts `~/devenv` read-write, so a sandboxed process can currently reach its own allowlist through that mount — this is not yet a real trust boundary; a fix (e.g. moving the live files back out of the repo, or a read-only remount) is intentionally deferred. `firewall/start.sh` watches the allowlist and SIGHUPs Squid to reload it live. Lifecycle is auto-managed by `lib/container.sh` (`_shared_ensure_up`/`_shared_maybe_down` in `devenv container up/down`): started on the first worktree's `up`, torn down when the last worktree's app container leaves `devenv-shared_proxy_net` — derived live from `docker network inspect`, not a counter file. Because Compose `depends_on` can't cross projects, the app container's readiness gate on the firewall is a manual health poll (`_shared_wait_healthy`) in `lib/container.sh`, not `depends_on: condition: service_healthy`.
 
-There is no build, test, or lint step. The repo is bash scripts + config files.
+3. **`dashboard/`** — an Ink (React for CLI) TUI, run on **Bun** (`devenv dashboard`, via `lib/dashboard.sh`), for monitoring worktrees/containers/agents at a glance. Runs on the host only — it shells out to `docker`/`git worktree` directly and needs no devcontainer. Not a port of anything; built from the design handoff in `design_handoff_worktree_dashboard/README.md` (kept outside this repo).
+
+There is no build, test, or lint step for the bash CLI. `dashboard/` is the one payload with real dependencies (`bun install`), managed independently of the rest of the repo.
 
 ## Hard invariants
 
@@ -39,6 +41,7 @@ Add a `link_relative` line to `install.sh` and re-run it. The script is idempote
 - `devenv container down <repo> <branch>` — stop that worktree's stack. Also tears down the shared `devenv-shared` stack if this was the last worktree attached to it.
 - `devenv container attach <repo> <branch>` — exec a zsh shell in the running dev container (VS Code can separately "Attach to Running Container" using the same `${COMPOSE_PROJECT_NAME}-devcontainer` container name).
 - `devenv container list` — list running devenv-managed container stacks.
+- `devenv dashboard` — launch the Ink TUI (`dashboard/`, requires Bun on the host; run `bun install` in `dashboard/` first).
 
 ## Commit conventions
 

@@ -1,5 +1,6 @@
 .DS_Store
 node_modules/
+dashboard/bun.lock
 devcontainer/infra/approver/package-lock.json
 devcontainer/infra/approver/bun.lock
 *.tgz

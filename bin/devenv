@@ -17,6 +17,7 @@ case "${1:-}" in
     worktree)          shift; cmd_worktree "$@" ;;
     container)         shift; cmd_container "$@" ;;
     agent)             shift; cmd_agent "$@" ;;
+    dashboard)         shift; cmd_dashboard "$@" ;;
     *)
         echo "usage: devenv <command>"
         echo ""
@@ -36,6 +37,7 @@ case "${1:-}" in
         echo "  agent attach <repo> <branch> [name]        attach to a background agent (fzf picker if name omitted/ambiguous)"
         echo "  agent rm <repo> <branch> [name]            remove a background agent from claude's session list (fzf picker if name omitted/ambiguous)"
         echo "  agent list [repo] [branch]      list background agents (running worktree containers, or one)"
+        echo "  dashboard                       launch the Ink TUI for monitoring worktrees/containers/agents"
         exit 1
         ;;
 esac
