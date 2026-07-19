@@ -27,6 +27,5 @@ paths:
 - Use `interface` for object shapes that may be extended; use `type` for unions, intersections, and aliases.
 - Prefer `readonly` on properties that should not be mutated after construction.
 - Type only imports should be clearly marked with `type` — it is ok to mix type imports with standard imports.
-- Strongly prefer named exports over default exports.
 - Default to using `const` — `let` should only be used when reassignment is necessary.
 - Use optional chaining (`?.`) and nullish coalescing (`??`) instead of manual null checks unless a null value triggers other behavior.

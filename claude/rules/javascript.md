@@ -21,7 +21,6 @@ paths:
 
 ## Style
 - Use `const` for all values that are never reassigned, including objects and arrays (mutating their contents is fine; reassigning the binding is not).
-- Prefer named exports over default exports.
 - Use optional chaining (`?.`) and nullish coalescing (`??`) instead of manual null checks unless other behavior is triggered on a null value.
 
 Doc comment rules live in [doc-comments.md](doc-comments.md).
