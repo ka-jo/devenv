@@ -24,8 +24,4 @@ paths:
 - Prefer named exports over default exports.
 - Use optional chaining (`?.`) and nullish coalescing (`??`) instead of manual null checks unless other behavior is triggered on a null value.
 
-## Documentation
-- Every symbol (function, class, method, property, exported constant) must have a JSDoc comment (`/** */`).
-- Public members and exports require thorough documentation: describe purpose, all parameters with `@param {Type} name`, return value with `@returns {Type}`, and any relevant behavior or constraints.
-- Protected and private members require at minimum a one-line summary describing its motivation.
-- Any method with explicit `throw` statements must have a `@throws {ErrorType}` tag for each distinct error type it directly throws, describing the condition that triggers it. Do not document errors that merely bubble up from called methods.
+Doc comment rules live in [doc-comments.md](doc-comments.md).

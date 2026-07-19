@@ -31,8 +31,4 @@ paths:
 - Default to using `const` — `let` should only be used when reassignment is necessary.
 - Use optional chaining (`?.`) and nullish coalescing (`??`) instead of manual null checks unless a null value triggers other behavior.
 
-## Documentation
-- Every symbol (class, function, method, property, type, interface, enum value, exported constant) must have a TSDoc comment (`/** */`).
-- Public members and exports require thorough documentation: describe purpose, parameters (`@param`), return value (`@returns`), and any relevant behavior or constraints.
-- Protected and private members require at minimum a one-line summary describing its motivation.
-- Any method with explicit `throw` statements must have a `@throws {ErrorType}` tag in its TSDoc block for each distinct error type it directly throws, describing the condition that triggers it.
+Doc comment rules live in [doc-comments.md](doc-comments.md).
