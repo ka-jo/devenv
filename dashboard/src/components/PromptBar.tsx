@@ -16,14 +16,7 @@ export interface PromptBarProps {
 }
 
 /**
- * Bottom-most command bar: the `devenv ›` prompt plus a self-contained text
- * buffer (with a movable cursor) while active, or a dim hint while idle, and
- * a right-aligned key-hint legend — the single source of truth for global
- * shortcuts (see the design handoff's Prompt/command bar spec).
- *
- * Owns its own text/cursor state — the parent only needs to know whether
- * command mode is active and what was submitted/cancelled.
- *
+ * Bottom command bar: `devenv ›` prompt plus text input, or a dim hint when idle.
  * @param props - See {@link PromptBarProps}.
  * @returns The rendered prompt bar.
  */

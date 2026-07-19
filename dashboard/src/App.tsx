@@ -12,28 +12,15 @@ type Mode = "normal" | "command";
 
 let instance: Instance;
 
-/**
- * (Re)mounts the dashboard. Ink owns the alternate-screen buffer, cursor
- * visibility, and raw mode for as long as this instance is mounted.
- *
- * @returns The new Ink instance.
- */
+/** (Re)mounts the dashboard as a fresh Ink instance. */
 function renderApp(): Instance {
     return render(<App />, { alternateScreen: true });
 }
 
-/**
- * Hands the real terminal to a devenv subcommand.
- *
- * Ink must be fully unmounted first — not just have its `useInput` hooks
- * deactivated — since Ink ties raw-mode/stdin-flowing state to whether any
- * hook is active, and {@link runCommand} needs undisputed control of stdin
- * for its own manual bridging.
- *
- * @param command - The command text as typed, for the echoed prompt line.
- * @param args - Arguments to pass to the `devenv` binary (already split).
- */
+/** Hands the real terminal to a devenv subcommand, then remounts Ink. */
 async function handleRunCommand(command: string, args: readonly string[]): Promise<void> {
+    // Full unmount, not just deactivating useInput — Ink ties raw-mode/stdin-flowing
+    // to whether any hook is active, and runCommand needs undisputed stdin control.
     instance.unmount();
     await instance.waitUntilExit();
 
@@ -49,11 +36,6 @@ async function handleRunCommand(command: string, args: readonly string[]): Promi
 /**
  * Root component of the devenv dashboard: a full-screen layout with a
  * content area above and a prompt bar pinned to the bottom.
- *
- * Owns only the `mode` flag — cross-cutting state that determines which
- * region's `useInput` handler is active (see {@link PromptBar} for the
- * text-editing state, which is local to it).
- *
  * @returns The rendered dashboard.
  */
 export function App(): JSX.Element {

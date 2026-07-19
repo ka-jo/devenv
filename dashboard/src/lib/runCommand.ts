@@ -7,19 +7,11 @@ const CLEAR_SCREEN = "\x1b[2J\x1b[H";
 /** Ctrl-] (0x1d) — a classic telnet/console escape byte, forces the child to be killed. */
 const DETACH_KEY = 0x1d;
 
-/**
- * Normalizes a `process.stdin` `"data"` chunk to a `Buffer`.
- *
- * Ink's `handleSetRawMode` calls `stdin.setEncoding('utf8')` once any
- * `useInput` hook goes active and never reverts it, and there's no public API
- * to clear it back to `null`. This module reasserts `latin1` instead — a
- * lossless single-byte round trip — since `utf8` would silently corrupt any
- * byte in the raw pty stream that isn't valid UTF-8.
- *
- * @param chunk - The raw value from a stdin `"data"` event.
- * @returns The chunk as a `Buffer`, decoded as latin1 if it arrived as a string.
- */
+/** Normalizes a `process.stdin` "data" chunk to a `Buffer`, decoding latin1 if it arrived as a string. */
 function toBuffer(chunk: Buffer | string): Buffer {
+    // Ink's handleSetRawMode calls stdin.setEncoding('utf8') once any useInput hook goes
+    // active, with no public API to undo it — latin1 is a lossless single-byte round trip,
+    // unlike utf8 which would corrupt non-UTF8 bytes in the raw pty stream.
     return typeof chunk === "string" ? Buffer.from(chunk, "latin1") : chunk;
 }
 
@@ -32,20 +24,13 @@ const isDetachKeypress = (chunk: Buffer): boolean => chunk.includes(DETACH_KEY);
 /**
  * Runs a devenv subcommand under a real pseudo-terminal, bridging the
  * dashboard's stdin/stdout to it so the child sees a genuine TTY.
- *
- * Reads raw stdin directly, bypassing Ink — callers must fully unmount Ink
- * first, not just deactivate `useInput` hooks, since Ink disables raw mode
- * once no hook is active and would starve this function of input.
- *
- * Ctrl-] force-kills the child as a detach escape hatch. After the child
- * exits, waits for Enter (or Ctrl-]) before returning so its output stays
- * readable instead of being replaced by the dashboard's next repaint.
- *
  * @param command - The command text as typed, for the echoed prompt line.
  * @param args - Arguments to pass to the `devenv` binary (already split).
  * @returns The subprocess's exit code.
  */
 export async function runCommand(command: string, args: readonly string[]): Promise<number> {
+    // Reads raw stdin directly, bypassing Ink — callers must fully unmount Ink first, not
+    // just deactivate useInput hooks, since Ink disables raw mode once no hook is active.
     let child: ReturnType<typeof Bun.spawn> | undefined;
 
     const terminal = new Bun.Terminal({
@@ -92,6 +77,8 @@ export async function runCommand(command: string, args: readonly string[]): Prom
         process.stdin.off("data", forwardInput);
         process.stdout.off("resize", forwardResize);
 
+        // Wait for Enter/Ctrl-] before returning, so the child's output stays on screen
+        // instead of being replaced by the dashboard's next repaint.
         process.stdout.write(`\r\n\x1b[2m[exit ${exitCode} — press Enter to continue]\x1b[0m`);
         await new Promise<void>((resolve): void => {
             const waitForContinue = (rawChunk: Buffer | string): void => {
