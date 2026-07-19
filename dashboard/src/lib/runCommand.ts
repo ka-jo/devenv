@@ -3,6 +3,12 @@ import { logDebug } from "./log.ts";
 const SHOW_CURSOR = "\x1b[?25h";
 const HIDE_CURSOR = "\x1b[?25l";
 const CLEAR_SCREEN = "\x1b[2J\x1b[H";
+// Ink's own alternate screen closes on unmount (App.tsx unmounts before calling
+// runCommand, to hand stdin control to the child), so without these the child's
+// output would land in the primary buffer's scrollback instead of being discarded
+// with the rest of the dashboard's alt-screen contents on quit.
+const ENTER_ALT_SCREEN = "\x1b[?1049h";
+const EXIT_ALT_SCREEN = "\x1b[?1049l";
 
 /** Ctrl-] (0x1d) — a classic telnet/console escape byte, forces the child to be killed. */
 const DETACH_KEY = 0x1d;
@@ -62,7 +68,7 @@ export async function runCommand(command: string, args: readonly string[]): Prom
         process.stdin.resume();
 
         process.stdout.write(
-            `${CLEAR_SCREEN}${SHOW_CURSOR}\x1b[91mdevenv › ${command}\x1b[0m  \x1b[2m(Ctrl-] to force-detach)\x1b[0m\r\n\r\n`,
+            `${ENTER_ALT_SCREEN}${CLEAR_SCREEN}${SHOW_CURSOR}\x1b[91mdevenv › ${command}\x1b[0m  \x1b[2m(Ctrl-] to force-detach)\x1b[0m\r\n\r\n`,
         );
 
         child = Bun.spawn(["devenv", ...args], { terminal });
@@ -97,6 +103,6 @@ export async function runCommand(command: string, args: readonly string[]): Prom
         process.stdin.off("data", forwardInput);
         process.stdout.off("resize", forwardResize);
         terminal.close();
-        process.stdout.write(HIDE_CURSOR);
+        process.stdout.write(`${HIDE_CURSOR}${EXIT_ALT_SCREEN}`);
     }
 }
