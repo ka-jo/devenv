@@ -3,6 +3,8 @@ import type { JSX } from "react";
 import { Box, render, Text, useApp, useInput } from "ink";
 import type { Instance } from "ink";
 import { PromptBar } from "./components/PromptBar.tsx";
+import { Sidebar } from "./components/Sidebar.tsx";
+import { useRepoSummaries } from "./hooks/useRepoSummaries.ts";
 import { useTerminalSize } from "./hooks/useTerminalSize.ts";
 import { logError } from "./lib/log.ts";
 import { runCommand } from "./lib/runCommand.ts";
@@ -34,14 +36,15 @@ async function handleRunCommand(command: string, args: readonly string[]): Promi
 }
 
 /**
- * Root component of the devenv dashboard: a full-screen layout with a
- * content area above and a prompt bar pinned to the bottom.
+ * Root component: sidebar + content area above a pinned prompt bar.
  * @returns The rendered dashboard.
  */
 export function App(): JSX.Element {
     const { exit } = useApp();
     const { rows } = useTerminalSize();
     const [mode, setMode] = useState<Mode>("normal");
+    const summaries = useRepoSummaries();
+    const [selectedRepo, setSelectedRepo] = useState<string | undefined>(undefined);
 
     useInput(
         (input, key): void => {
@@ -66,8 +69,11 @@ export function App(): JSX.Element {
 
     return (
         <Box flexDirection="column" width="100%" height={rows}>
-            <Box flexGrow={1} alignItems="center" justifyContent="center">
-                <Text dimColor>devenv dashboard — sidebar/grid land in later milestones</Text>
+            <Box flexGrow={1} flexDirection="row">
+                <Sidebar summaries={summaries} isFocused={mode === "normal"} onSelectRepo={setSelectedRepo} />
+                <Box flexGrow={1} alignItems="center" justifyContent="center">
+                    <Text dimColor>{selectedRepo ? `${selectedRepo} — grid lands in a later milestone` : "All repos — grid lands in a later milestone"}</Text>
+                </Box>
             </Box>
             <PromptBar isActive={mode === "command"} onSubmit={handleSubmit} onCancel={handleCancel} />
         </Box>
