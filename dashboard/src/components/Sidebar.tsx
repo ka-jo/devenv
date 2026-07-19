@@ -9,52 +9,6 @@ const SIDEBAR_WIDTH = 30;
 /** Sentinel `value` for the "All repos" row — maps to `selectedRepo === undefined` (no filter). */
 const ALL_REPOS_VALUE = undefined;
 
-/** Row shape `ink-select-input` expects; redeclared here since the library exports only the `Item` component, not its `Item<V>` type. */
-interface RepoListItem {
-    readonly key: string;
-    readonly label: string;
-    readonly value: string | undefined;
-    readonly worktreeCount: number;
-    readonly agentCount: number;
-    /** Whether a horizontal rule renders below this row — set only on "All repos". */
-    readonly hasDividerBelow: boolean;
-}
-
-/** Custom `ink-select-input` row: name line, dim worktree/agent counts below, optional divider. */
-function RepoRow({
-    isSelected,
-    label,
-    worktreeCount = 0,
-    agentCount = 0,
-    hasDividerBelow = false,
-}: {
-    readonly isSelected?: boolean;
-    readonly label: string;
-    // Fields below are optional only so this structurally satisfies ink-select-input's
-    // ItemProps — the library always spreads the full RepoListItem at runtime.
-    readonly worktreeCount?: number;
-    readonly agentCount?: number;
-    readonly hasDividerBelow?: boolean;
-}): JSX.Element {
-    // A two-line Box still aligns under ink-select-input's indicator column: the indicator
-    // is its own one-line Box beside this one, so both lines share its left offset.
-    return (
-        <Box flexDirection="column">
-            <Text color={isSelected ? "blueBright" : undefined} wrap="truncate-end">
-                {label}
-            </Text>
-            <Box flexDirection="row" flexWrap="wrap">
-                <Text dimColor>{`${worktreeCount} worktrees`}</Text>
-                <Text dimColor>{"·"}</Text>
-                <Text dimColor>{`${agentCount} agents`}</Text>
-            </Box>
-            {hasDividerBelow ? (
-                <Box marginLeft={-2} width={SIDEBAR_WIDTH - 3} borderStyle="single" borderTop={false} borderLeft={false} borderRight={false} />
-            ) : null}
-        </Box>
-    );
-}
-
 /** Props for {@link Sidebar}. */
 export interface SidebarProps {
     /** Per-repo worktree/agent counts to list, one row per repo. */
@@ -116,6 +70,55 @@ export function Sidebar({ summaries, isFocused, onSelectRepo }: SidebarProps): J
                 itemComponent={RepoRow}
                 onHighlight={(item: { value: string | undefined }): void => onSelectRepo(item.value)}
             />
+        </Box>
+    );
+}
+
+/** Row shape `ink-select-input` expects; redeclared here since the library exports only the `Item` component, not its `Item<V>` type. */
+interface RepoListItem {
+    readonly key: string;
+    readonly label: string;
+    readonly value: string | undefined;
+    readonly worktreeCount: number;
+    readonly agentCount: number;
+    /** Whether a horizontal rule renders below this row — set only on "All repos". */
+    readonly hasDividerBelow: boolean;
+}
+
+/** Props for {@link RepoRow}. */
+interface RepoRowProps {
+    readonly isSelected?: boolean;
+    readonly label: string;
+    // Fields below are optional only so this structurally satisfies ink-select-input's
+    // ItemProps — the library always spreads the full RepoListItem at runtime.
+    readonly worktreeCount?: number;
+    readonly agentCount?: number;
+    readonly hasDividerBelow?: boolean;
+}
+
+/** Custom `ink-select-input` row: name line, dim worktree/agent counts below, optional divider. */
+function RepoRow({
+    isSelected,
+    label,
+    worktreeCount = 0,
+    agentCount = 0,
+    hasDividerBelow = false,
+}: RepoRowProps): JSX.Element {
+    // A two-line Box still aligns under ink-select-input's indicator column: the indicator
+    // is its own one-line Box beside this one, so both lines share its left offset.
+    return (
+        <Box flexDirection="column">
+            <Text color={isSelected ? "blueBright" : undefined} wrap="truncate-end">
+                {label}
+            </Text>
+            <Box flexDirection="row" flexWrap="wrap">
+                <Text dimColor>{`${worktreeCount} worktrees`}</Text>
+                <Text dimColor>{"·"}</Text>
+                <Text dimColor>{`${agentCount} agents`}</Text>
+            </Box>
+            {hasDividerBelow ? (
+                <Box marginLeft={-2} width={SIDEBAR_WIDTH - 3} borderStyle="single" borderTop={false} borderLeft={false} borderRight={false} />
+            ) : null}
         </Box>
     );
 }
