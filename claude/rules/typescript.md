@@ -30,5 +30,3 @@ paths:
 - Strongly prefer named exports over default exports.
 - Default to using `const` — `let` should only be used when reassignment is necessary.
 - Use optional chaining (`?.`) and nullish coalescing (`??`) instead of manual null checks unless a null value triggers other behavior.
-
-Doc comment rules live in [doc-comments.md](doc-comments.md).
