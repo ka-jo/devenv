@@ -9,7 +9,7 @@ _require_fzf() {
 _pick_worktree_any() {
     _require_fzf
     local sel
-    sel="$(_iter_worktrees | sort | fzf --prompt="worktree> " --delimiter='\t' --with-nth=1,2)" || exit 1
+    sel="$(_iter_worktrees | sort | fzf --height=~40% --layout=reverse --prompt="worktree> " --delimiter='\t' --with-nth=1,2)" || exit 1
     [[ -n "$sel" ]] || exit 1
     PICK_REPO="${sel%%$'\t'*}"
     PICK_BRANCH="${sel#*$'\t'}"
@@ -33,7 +33,7 @@ _pick_worktree_running() {
     fi
 
     local sel
-    sel="$(printf '%s\n' "${candidates[@]}" | sort | fzf --prompt="container> " --delimiter='\t' --with-nth=1,2)" || exit 1
+    sel="$(printf '%s\n' "${candidates[@]}" | sort | fzf --height=~40% --layout=reverse --prompt="container> " --delimiter='\t' --with-nth=1,2)" || exit 1
     [[ -n "$sel" ]] || exit 1
     PICK_REPO="${sel%%$'\t'*}"
     PICK_BRANCH="${sel#*$'\t'}"
