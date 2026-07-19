@@ -4,6 +4,7 @@ paths:
   - "**/*.tsx"
   - "**/*.js"
   - "**/*.jsx"
+  - "**/*.cs"
 ---
 
 # Naming Conventions for Boolean Variables, Properties, and Functions
