@@ -1,7 +1,7 @@
 import type { JSX } from "react";
 import { Box, Text } from "ink";
 import SelectInput from "ink-select-input";
-import type { RepoSummary } from "../lib/repoSummaries.ts";
+import type { RepoSummary } from "../state/selectors/repoSummaries.ts";
 
 /** Fixed column width of the sidebar, in terminal cells. */
 export const SIDEBAR_WIDTH = 30;

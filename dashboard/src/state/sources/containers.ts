@@ -12,36 +12,45 @@ export interface ContainerInfo {
 }
 
 /** A container that has never run, or was removed — nothing found for the compose project. */
-const NO_CONTAINER: ContainerInfo = { status: "stopped", containerId: undefined, uptime: undefined };
+export const NO_CONTAINER: ContainerInfo = { status: "stopped", containerId: undefined, uptime: undefined };
 
 /**
- * Looks up a worktree's container status via `docker ps -a`.
- * @param projectName - Compose project name from {@link composeProjectName} (agents.ts).
- * @returns The container's derived status/id/uptime. Degrades to {@link NO_CONTAINER} on any lookup failure.
+ * Looks up every devenv-managed container in one `docker ps` sweep, keyed by compose project
+ * name.
+ * @returns Container info by compose project name. Worktrees with no container simply have no entry.
  */
-export async function getContainerInfo(projectName: string): Promise<ContainerInfo> {
-    const proc = Bun.spawn(
-        ["docker", "ps", "-a", "--filter", `label=com.docker.compose.project=${projectName}`, "--format", "{{.ID}}\t{{.Status}}"],
-        { stdout: "pipe", stderr: "ignore" },
-    );
+export async function listAllContainerInfos(): Promise<Map<string, ContainerInfo>> {
+    const proc = Bun.spawn(["docker", "ps", "-a", "--format", '{{.ID}}\t{{.Status}}\t{{.Label "com.docker.compose.project"}}'], {
+        stdout: "pipe",
+        stderr: "ignore",
+    });
     const output = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
     if (exitCode !== 0) {
-        return NO_CONTAINER;
+        return new Map();
     }
 
-    // A compose project can have more than one container in general, but this repo's
-    // devcontainer stack defines exactly one (`devcontainer`) per project.
-    const firstLine = output.split("\n").find((line): boolean => line.trim().length > 0);
-    if (firstLine === undefined) {
-        return NO_CONTAINER;
+    const infos = new Map<string, ContainerInfo>();
+    for (const line of output.split("\n")) {
+        if (line.trim().length === 0) {
+            continue;
+        }
+        const [containerId, statusText, projectName] = line.split("\t");
+        if (containerId === undefined || statusText === undefined || projectName === undefined || projectName.length === 0) {
+            continue;
+        }
+        infos.set(projectName, parseContainerInfo(containerId, statusText));
     }
+    return infos;
+}
 
-    const [containerId, statusText] = firstLine.split("\t");
-    if (containerId === undefined || statusText === undefined) {
-        return NO_CONTAINER;
-    }
-
+/**
+ * Builds a {@link ContainerInfo} from one `docker ps` row.
+ * @param containerId - Short container id (`docker ps` default form).
+ * @param statusText - The raw `Status` column, e.g. `"Up 3 hours"` or `"Exited (0) 5 minutes ago"`.
+ * @returns The derived status/id/uptime.
+ */
+function parseContainerInfo(containerId: string, statusText: string): ContainerInfo {
     return { status: deriveStatus(statusText), containerId, uptime: parseUptime(statusText) };
 }
 

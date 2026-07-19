@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { JSX } from "react";
 import { Box, render, useApp, useInput } from "ink";
 import type { Instance } from "ink";
@@ -6,11 +6,12 @@ import { Grid, type GridPageInfo } from "./components/Grid.tsx";
 import { PaginationBar } from "./components/PaginationBar.tsx";
 import { PromptBar } from "./components/PromptBar.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
-import { useRepoSummaries } from "./hooks/useRepoSummaries.ts";
+import { useDashboardState } from "./hooks/useDashboardState.ts";
 import { useTerminalSize } from "./hooks/useTerminalSize.ts";
-import { useWorktreeStatuses } from "./hooks/useWorktreeStatuses.ts";
 import { logError } from "./lib/log.ts";
 import { runCommand } from "./lib/runCommand.ts";
+import { selectRepoSummaries, type RepoSummary } from "./state/selectors/repoSummaries.ts";
+import { selectWorktreeStatuses, type WorktreeStatus } from "./state/selectors/worktreeStatuses.ts";
 
 /** Whether the prompt bar is idle or capturing a `/`-triggered command. */
 type Mode = "normal" | "command";
@@ -52,8 +53,9 @@ export function App(): JSX.Element {
   const { exit } = useApp();
   const { rows } = useTerminalSize();
   const [mode, setMode] = useState<Mode>("normal");
-  const summaries = useRepoSummaries();
-  const cards = useWorktreeStatuses();
+  const state = useDashboardState();
+  const summaries = useMemo((): RepoSummary[] => selectRepoSummaries(state), [state]);
+  const cards = useMemo((): WorktreeStatus[] => selectWorktreeStatuses(state), [state]);
   const [selectedRepo, setSelectedRepo] = useState<string | undefined>(
     undefined,
   );

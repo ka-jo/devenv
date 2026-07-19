@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { JSX } from "react";
 import { Box, Text, useInput } from "ink";
-import type { ContainerStatus } from "../lib/containers.ts";
-import type { WorktreeStatus } from "../lib/worktreeStatuses.ts";
 import { useTerminalSize } from "../hooks/useTerminalSize.ts";
+import type { ContainerStatus } from "../state/sources/containers.ts";
+import type { WorktreeStatus } from "../state/selectors/worktreeStatuses.ts";
 import { SIDEBAR_WIDTH } from "./Sidebar.tsx";
 
 /** Fixed width of one card, in terminal cells (border included). */
