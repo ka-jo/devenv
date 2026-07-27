@@ -2,14 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import type { JSX } from "react";
 import { Box, Text, useInput } from "ink";
 import { useTerminalSize } from "../hooks/useTerminalSize.ts";
-import type { ContainerStatus } from "../state/sources/containers.ts";
-import type { WorktreeStatus } from "../state/selectors/worktreeStatuses.ts";
+import type { AgentInfo, AgentState } from "../state/sources/agents.ts";
+import type { CardStatus, WorktreeStatus } from "../state/selectors/worktreeStatuses.ts";
 import { SIDEBAR_WIDTH } from "./Sidebar.tsx";
 
 /** Fixed width of one card, in terminal cells (border included). */
 const CARD_WIDTH = 36;
-/** Estimated height of one card, in terminal cells (border + 3 content lines). */
-const CARD_HEIGHT = 5;
+/** Max agent rows rendered per card before collapsing the rest into a "+N more" line — keeps card height fixed so the page-size math in {@link Grid} stays accurate regardless of how many agents a container runs. */
+const MAX_AGENT_ROWS = 3;
+/** Fixed height of one card, in terminal cells: border(2) + kicker/status header(2) + meta(1) + divider(1) + agent rows. */
+const CARD_HEIGHT = 2 + 2 + 1 + 1 + MAX_AGENT_ROWS;
 /** Gap between adjacent cards, in terminal cells. */
 const CARD_GAP = 1;
 /** Reserved width for the status badge (longest label is `"● Running"`, 9 cells) — fixed so it never competes with the repo/branch kicker for space. */
@@ -130,10 +132,20 @@ export function Grid({ cards, selectedRepo, isFocused, onPageInfoChange }: GridP
     );
 }
 
-/** Glyph/color/label for one {@link ContainerStatus}. */
-const STATUS_DISPLAY: Record<ContainerStatus, { readonly glyph: string; readonly color: string | undefined; readonly label: string }> = {
+/** Glyph/color/label for one {@link CardStatus}. */
+const STATUS_DISPLAY: Record<CardStatus, { readonly glyph: string; readonly color: string | undefined; readonly label: string }> = {
     running: { glyph: "●", color: "green", label: "Running" },
+    attention: { glyph: "◉", color: "yellow", label: "Needs input" },
     error: { glyph: "■", color: "redBright", label: "Error" },
+    stopped: { glyph: "○", color: undefined, label: "Stopped" },
+};
+
+/** Glyph/color/label for one {@link AgentState}. */
+const AGENT_STATUS_DISPLAY: Record<AgentState, { readonly glyph: string; readonly color: string | undefined; readonly label: string }> = {
+    working: { glyph: "●", color: "green", label: "Working" },
+    blocked: { glyph: "◉", color: "yellow", label: "Blocked" },
+    done: { glyph: "○", color: undefined, label: "Done" },
+    failed: { glyph: "■", color: "redBright", label: "Failed" },
     stopped: { glyph: "○", color: undefined, label: "Stopped" },
 };
 
@@ -143,11 +155,11 @@ interface WorktreeCardViewProps {
     readonly isFocused: boolean;
 }
 
-/** One worktree card: repo/branch kicker (left, own bounded width) beside a status badge (right, own reserved width), and a container meta line. */
+/** One worktree card: repo/branch kicker (left, own bounded width) beside a status badge (right, own reserved width), a container meta line, and its agent sessions. */
 function WorktreeCardView({ card, isFocused }: WorktreeCardViewProps): JSX.Element {
     const { glyph, color, label } = STATUS_DISPLAY[card.status];
     const meta =
-        card.status === "running"
+        card.status === "running" || card.status === "attention"
             ? `container ${card.containerId ?? "?"}  ·  up ${card.uptime ?? "?"}`
             : card.status === "error"
               ? `container ${card.containerId ?? "?"}  ·  exited`
@@ -156,12 +168,14 @@ function WorktreeCardView({ card, isFocused }: WorktreeCardViewProps): JSX.Eleme
     return (
         <Box
             width={CARD_WIDTH}
+            height={CARD_HEIGHT}
             marginRight={CARD_GAP}
             marginBottom={CARD_GAP}
             flexDirection="column"
             paddingX={1}
             borderStyle={isFocused ? "bold" : "single"}
             borderColor={isFocused ? "redBright" : undefined}
+            overflow="hidden"
         >
             <Box justifyContent="space-between">
                 <Box width={KICKER_WIDTH} flexDirection="column">
@@ -179,6 +193,62 @@ function WorktreeCardView({ card, isFocused }: WorktreeCardViewProps): JSX.Eleme
             <Text dimColor wrap="truncate-end">
                 {meta}
             </Text>
+            <Text dimColor>{"─".repeat(CARD_WIDTH - 4)}</Text>
+            <AgentRows agents={card.agents} />
         </Box>
     );
+}
+
+/** Props for {@link AgentRows}. */
+interface AgentRowsProps {
+    readonly agents: readonly AgentInfo[];
+}
+
+/** Up to {@link MAX_AGENT_ROWS} agent-session lines, collapsing any excess into a trailing "+N more" line. */
+function AgentRows({ agents }: AgentRowsProps): JSX.Element {
+    if (agents.length === 0) {
+        return <Text dimColor>No agents</Text>;
+    }
+
+    const overflowCount = agents.length > MAX_AGENT_ROWS ? agents.length - (MAX_AGENT_ROWS - 1) : 0;
+    const visibleCount = overflowCount > 0 ? MAX_AGENT_ROWS - 1 : agents.length;
+
+    return (
+        <>
+            {agents.slice(0, visibleCount).map((agent): JSX.Element => <AgentRow key={agent.id} agent={agent} />)}
+            {overflowCount > 0 && <Text dimColor>{`+${overflowCount} more`}</Text>}
+        </>
+    );
+}
+
+/** Props for {@link AgentRow}. */
+interface AgentRowProps {
+    readonly agent: AgentInfo;
+}
+
+/** One agent session line: status dot, session name, state label (or what it's waiting on, if blocked), and elapsed runtime. */
+function AgentRow({ agent }: AgentRowProps): JSX.Element {
+    const { glyph, color, label } = AGENT_STATUS_DISPLAY[agent.state];
+    const statusText = agent.state === "blocked" && agent.waitingFor !== undefined ? agent.waitingFor : label;
+    return (
+        <Text wrap="truncate-end">
+            <Text color={color}>{glyph}</Text>
+            {` ${agent.name ?? agent.id}  ${statusText} · ${formatElapsed(agent.startedAt)}`}
+        </Text>
+    );
+}
+
+/** Formats the time since an ISO timestamp as a short elapsed label, e.g. `"3m"` or `"1h 12m"`. */
+function formatElapsed(startedAt: string): string {
+    const elapsedMs = Math.max(0, Date.now() - Date.parse(startedAt));
+    const totalMinutes = Math.floor(elapsedMs / 60_000);
+    if (totalMinutes < 1) {
+        return `${Math.floor(elapsedMs / 1000)}s`;
+    }
+    if (totalMinutes < 60) {
+        return `${totalMinutes}m`;
+    }
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return `${hours}h ${minutes}m`;
 }

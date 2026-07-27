@@ -1,6 +1,6 @@
 import { logError } from "../lib/log.ts";
 import { composeProjectName } from "./identifiers.ts";
-import { countBackgroundAgents } from "./sources/agents.ts";
+import { listBackgroundAgents, type AgentInfo } from "./sources/agents.ts";
 import { listAllContainerInfos, type ContainerInfo } from "./sources/containers.ts";
 import { listRepos, listWorktrees, type WorktreeInfo } from "./sources/worktrees.ts";
 
@@ -15,11 +15,11 @@ export interface DashboardState {
     readonly worktrees: readonly WorktreeInfo[];
     /** Container info by compose project name ({@link composeProjectName}). Missing entry means no container exists yet. */
     readonly containers: ReadonlyMap<string, ContainerInfo>;
-    /** Running background agent count by compose project name. Only populated for worktrees whose container is running. */
-    readonly agentCounts: ReadonlyMap<string, number>;
+    /** Running background agent sessions by compose project name. Only populated for worktrees whose container is running. */
+    readonly agentsByProject: ReadonlyMap<string, readonly AgentInfo[]>;
 }
 
-const EMPTY_STATE: DashboardState = { repos: [], worktrees: [], containers: new Map(), agentCounts: new Map() };
+const EMPTY_STATE: DashboardState = { repos: [], worktrees: [], containers: new Map(), agentsByProject: new Map() };
 
 let state: DashboardState = EMPTY_STATE;
 const listeners = new Set<() => void>();
@@ -73,18 +73,18 @@ async function refresh(): Promise<void> {
         const worktrees = await listWorktrees();
         const containers = await listAllContainerInfos();
 
-        const agentCounts = new Map<string, number>();
+        const agentsByProject = new Map<string, readonly AgentInfo[]>();
         await Promise.all(
             worktrees.map(async (worktree): Promise<void> => {
                 const projectName = composeProjectName(worktree.repo, worktree.branch);
                 if (containers.get(projectName)?.status !== "running") {
                     return;
                 }
-                agentCounts.set(projectName, await countBackgroundAgents(projectName, worktree.path));
+                agentsByProject.set(projectName, await listBackgroundAgents(projectName, worktree.path));
             }),
         );
 
-        setState({ repos, worktrees, containers, agentCounts });
+        setState({ repos, worktrees, containers, agentsByProject });
     } catch (error) {
         logError("dashboardStore.refresh", error);
     }

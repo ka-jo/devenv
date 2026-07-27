@@ -28,7 +28,7 @@ export function selectRepoSummaries(state: DashboardState): RepoSummary[] {
         const repoWorktrees = byRepo.get(repo) ?? [];
         const agentCount = repoWorktrees.reduce((sum, worktree): number => {
             const projectName = composeProjectName(worktree.repo, worktree.branch);
-            return sum + (state.agentCounts.get(projectName) ?? 0);
+            return sum + (state.agentsByProject.get(projectName)?.length ?? 0);
         }, 0);
         return { repo, worktreeCount: repoWorktrees.length, agentCount };
     });
