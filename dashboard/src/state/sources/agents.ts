@@ -1,10 +1,8 @@
 import path from "node:path";
+import { REPO_DIR } from "../../lib/paths.ts";
 
 /** Absolute path to the shared devcontainer compose file every worktree's container is defined by. */
-const COMPOSE_FILE = path.resolve(
-  import.meta.dir,
-  "../../../../devcontainer/docker-compose.yml",
-);
+const COMPOSE_FILE = path.join(REPO_DIR, "devcontainer/docker-compose.yml");
 
 /** One entry from `claude agents --json --all`. Only the field this module reads. */
 interface ClaudeAgentEntry {

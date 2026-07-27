@@ -1,8 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
-
-/** Absolute path to the devenv repo root, derived from this file's location. */
-const REPO_DIR = path.resolve(import.meta.dir, "../../../..");
+import { REPO_DIR } from "../../lib/paths.ts";
 
 /** Absolute path to the `worktrees/` directory this repo's CLI manages. */
 const WORKTREES_DIR = path.join(REPO_DIR, "worktrees");
