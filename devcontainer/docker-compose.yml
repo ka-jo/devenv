@@ -6,11 +6,35 @@ services:
     command: sleep infinity
     volumes:
       - ${WORKSPACE_DIR}:/workspace:cached
-      # Mount host's global Claude config and the devenv repo so that
-      # ~/.claude/* relative symlinks (created by devenv's scripts/install.sh)
-      # resolve inside the container, and edits to claude files propagate
-      # live in both directions. Adjust /root if the container user is not root.
-      - ${HOME}/.claude:/home/ka-jo/.claude
+      # Mount only the specific host ~/.claude entries the container needs, not the
+      # whole directory: config (install.sh's symlink targets — Docker resolves each
+      # through the host symlink to ../devenv/claude/... transparently, so edits still
+      # propagate live) plus auth, so every container stays logged in without its own
+      # `claude login` (assumes both files already exist on the host — run `claude
+      # login` there first if they don't). Everything else under ~/.claude —
+      # jobs/, projects/, sessions/, history.jsonl, cache/ — is deliberately NOT
+      # mounted: those are the supervisor's background-agent session registry, and
+      # sharing them verbatim across every worktree's container made every container
+      # see every other container's agents (they all report cwd=/workspace, so nothing
+      # in that shared registry could tell them apart). Each container now gets its
+      # own private copy, created fresh by Claude Code inside its own filesystem layer.
+      - ${HOME}/.claude/CLAUDE.md:/home/ka-jo/.claude/CLAUDE.md
+      - ${HOME}/.claude/rules:/home/ka-jo/.claude/rules
+      - ${HOME}/.claude/skills:/home/ka-jo/.claude/skills
+      - ${HOME}/.claude/agents:/home/ka-jo/.claude/agents
+      - ${HOME}/.claude/commands:/home/ka-jo/.claude/commands
+      - ${HOME}/.claude/output-styles:/home/ka-jo/.claude/output-styles
+      - ${HOME}/.claude/.credentials.json:/home/ka-jo/.claude/.credentials.json
+      - ${HOME}/.claude/settings.json:/home/ka-jo/.claude/settings.json
+      # ~/.claude.json (note: sibling to ~/.claude/, not inside it) is a separate legacy
+      # state file holding preferences the settings.json schema doesn't cover — e.g.
+      # leftArrowOpensAgents — plus misc UI/cache state (tipsHistory, cachedGrowthBook-
+      # Features, hasOpenedAgentsView). Shared read-write like the old blanket mount, so
+      # every container and the host all write the same file; unlike jobs/projects/
+      # sessions above, this file isn't a per-session registry keyed on a now-ambiguous
+      # cwd, so cross-container sharing doesn't reintroduce that specific bug — but
+      # concurrent writers can still race/clobber each other's updates to it.
+      - ${HOME}/.claude.json:/home/ka-jo/.claude.json
       - ${HOME}/devenv:/home/ka-jo/devenv
       - ./managed-settings.json:/etc/claude-code/managed-settings.json:ro
       - pnpm-store:/home/ka-jo/.pnpm-store
