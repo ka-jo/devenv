@@ -110,9 +110,17 @@ cmd_agent_up() {
 }
 
 cmd_agent_attach() {
-    local repo="${1:-}" branch="${2:-}" name="${3:-}"
+    local id="" positional=()
+    for a in "$@"; do
+        if [[ "$a" == --id=* ]]; then id="${a#--id=}"; else positional+=("$a"); fi
+    done
+    local repo="${positional[0]:-}" branch="${positional[1]:-}" name="${positional[2]:-}"
     _agent_resolve_running "$repo" "$branch"
-    _agent_pick "$name"
+    if [[ -n "$id" ]]; then
+        AGENT_ID="$id"; AGENT_NAME="$id"
+    else
+        _agent_pick "$name"
+    fi
     echo "attaching: $CT_PN (agent: $AGENT_NAME, id: $AGENT_ID)"
     _container_compose exec devcontainer "$CLAUDE_WRAPPER" attach "$AGENT_ID"
 }
