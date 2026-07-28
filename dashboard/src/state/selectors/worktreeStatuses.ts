@@ -12,6 +12,8 @@ export interface WorktreeStatus {
     readonly repo: string;
     /** Branch path relative to the repo, e.g. `"main"` or `"feature/x"`. */
     readonly branch: string;
+    /** Absolute path to the worktree's checkout. */
+    readonly path: string;
     /** Derived container/agent health. */
     readonly status: CardStatus;
     /** Short container id, or `undefined` if no container exists yet. */
@@ -36,6 +38,6 @@ export function selectWorktreeStatuses(state: DashboardState): WorktreeStatus[] 
             containerStatus === "running" && agents.some((agent): boolean => agent.state === "blocked")
                 ? "attention"
                 : containerStatus;
-        return { repo: worktree.repo, branch: worktree.branch, status, containerId, uptime, agents };
+        return { repo: worktree.repo, branch: worktree.branch, path: worktree.path, status, containerId, uptime, agents };
     });
 }

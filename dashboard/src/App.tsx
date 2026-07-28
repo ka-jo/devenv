@@ -12,6 +12,7 @@ import { logError } from "./lib/log.ts";
 import { runCommand } from "./lib/runCommand.ts";
 import { selectRepoSummaries, type RepoSummary } from "./state/selectors/repoSummaries.ts";
 import { selectWorktreeStatuses, type WorktreeStatus } from "./state/selectors/worktreeStatuses.ts";
+import { refreshDashboardState } from "./state/store.ts";
 
 /** Whether the prompt bar is idle or capturing a `/`-triggered command. */
 type Mode = "normal" | "command";
@@ -61,6 +62,7 @@ export function App(): JSX.Element {
   );
   const [focusRegion, setFocusRegion] = useState<FocusRegion>("sidebar");
   const [pageInfo, setPageInfo] = useState<GridPageInfo | undefined>(undefined);
+  const [focusedCard, setFocusedCard] = useState<WorktreeStatus | undefined>(undefined);
 
   useInput(
     (input, key): void => {
@@ -86,9 +88,28 @@ export function App(): JSX.Element {
     if (args.length === 0) {
       return;
     }
+    if (args[0] === "bg") {
+      if (focusedCard === undefined) {
+        return;
+      }
+      const name = `dash-${Date.now().toString(36)}`;
+      const promptWords = args.slice(1);
+      void (async (): Promise<void> => {
+        await handleRunCommand(command, ["agent", "up", focusedCard.repo, focusedCard.branch, name, "--", ...promptWords]);
+        await refreshDashboardState();
+      })();
+      return;
+    }
     void handleRunCommand(command, args);
   };
   const handleCancel = (): void => setMode("normal");
+
+  const handleAttachAgent = (repo: string, branch: string, agentId: string): void => {
+    void (async (): Promise<void> => {
+      await handleRunCommand(`agent attach ${repo} ${branch}`, ["agent", "attach", repo, branch, `--id=${agentId}`]);
+      await refreshDashboardState();
+    })();
+  };
 
   return (
     <Box flexDirection="column" width="100%" height={rows}>
@@ -104,6 +125,8 @@ export function App(): JSX.Element {
             selectedRepo={selectedRepo}
             isFocused={mode === "normal" && focusRegion === "grid"}
             onPageInfoChange={setPageInfo}
+            onAttachAgent={handleAttachAgent}
+            onFocusedCardChange={setFocusedCard}
           />
           <PaginationBar info={pageInfo} />
         </Box>

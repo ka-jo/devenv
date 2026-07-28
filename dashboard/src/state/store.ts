@@ -35,6 +35,15 @@ export function getDashboardState(): DashboardState {
 }
 
 /**
+ * Forces an immediate snapshot refresh, notifying subscribers, instead of waiting for the
+ * next {@link POLL_INTERVAL_MS} tick. Useful right after an action (dispatch/attach) that's
+ * known to have changed agent/container state.
+ */
+export async function refreshDashboardState(): Promise<void> {
+    await refresh();
+}
+
+/**
  * Subscribes to dashboard store updates, starting the poll loop on the first subscriber and
  * stopping it once the last one unsubscribes — mirrors the shared firewall stack's
  * start/stop-on-use lifecycle in this repo's own `lib/container.sh`.

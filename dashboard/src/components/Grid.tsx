@@ -47,6 +47,10 @@ export interface GridProps {
     readonly isFocused: boolean;
     /** Called whenever the current page/selection changes. */
     readonly onPageInfoChange: (info: GridPageInfo) => void;
+    /** Called when the user attaches to a specific agent row (row-cursor mode, Enter on a selected agent). */
+    readonly onAttachAgent: (repo: string, branch: string, agentId: string) => void;
+    /** Called whenever the currently-focused card changes, or `undefined` when nothing is focused. */
+    readonly onFocusedCardChange: (card: WorktreeStatus | undefined) => void;
 }
 
 /**
@@ -55,16 +59,20 @@ export interface GridProps {
  * @param props - See {@link GridProps}.
  * @returns The rendered grid.
  */
-export function Grid({ cards, selectedRepo, isFocused, onPageInfoChange }: GridProps): JSX.Element {
+export function Grid({ cards, selectedRepo, isFocused, onPageInfoChange, onAttachAgent, onFocusedCardChange }: GridProps): JSX.Element {
     const { columns: terminalColumns, rows: terminalRows } = useTerminalSize();
     const [focusedIndex, setFocusedIndex] = useState<number>(0);
+    const [focusedAgentIndex, setFocusedAgentIndex] = useState<number | undefined>(undefined);
 
     const filtered = useMemo(
         (): readonly WorktreeStatus[] => (selectedRepo === undefined ? cards : cards.filter((c): boolean => c.repo === selectedRepo)),
         [cards, selectedRepo],
     );
 
-    useEffect((): void => setFocusedIndex(0), [selectedRepo]);
+    useEffect((): void => {
+        setFocusedIndex(0);
+        setFocusedAgentIndex(undefined);
+    }, [selectedRepo]);
 
     const columnCount = Math.max(1, Math.floor((terminalColumns - SIDEBAR_WIDTH - 1) / (CARD_WIDTH + CARD_GAP)));
     const rowCount = Math.max(1, Math.floor((terminalRows - PROMPT_BAR_HEIGHT - PAGINATION_BAR_HEIGHT) / (CARD_HEIGHT + CARD_GAP)));
@@ -72,6 +80,14 @@ export function Grid({ cards, selectedRepo, isFocused, onPageInfoChange }: GridP
 
     const lastIndex = Math.max(0, filtered.length - 1);
     const effectiveIndex = Math.min(focusedIndex, lastIndex);
+    const focusedCard = filtered[effectiveIndex];
+
+    // Moving to a different card always drops back to card-level focus — the agent-row
+    // cursor only makes sense scoped to whichever card it was opened on.
+    useEffect((): void => setFocusedAgentIndex(undefined), [effectiveIndex]);
+
+    useEffect((): void => onFocusedCardChange(focusedCard), [focusedCard, onFocusedCardChange]);
+
     const page = Math.floor(effectiveIndex / pageSize);
     const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
     const pageStart = page * pageSize;
@@ -104,9 +120,37 @@ export function Grid({ cards, selectedRepo, isFocused, onPageInfoChange }: GridP
                 setFocusedIndex(Math.min(lastIndex, (page + 1) * pageSize));
             } else if (key.pageUp) {
                 setFocusedIndex(Math.max(0, (page - 1) * pageSize));
+            } else if (key.return) {
+                if (focusedCard !== undefined && focusedCard.agents.length > 0) {
+                    setFocusedAgentIndex(0);
+                }
             }
         },
-        { isActive: isFocused },
+        { isActive: isFocused && focusedAgentIndex === undefined },
+    );
+
+    // Agent-row cursor mode: Up/Down move between the focused card's agents, Enter
+    // attaches to the selected one, Escape returns to card-level focus.
+    useInput(
+        (_input, key): void => {
+            if (focusedCard === undefined || focusedAgentIndex === undefined) {
+                return;
+            }
+            const lastAgentIndex = Math.max(0, focusedCard.agents.length - 1);
+            if (key.upArrow) {
+                setFocusedAgentIndex(Math.max(0, focusedAgentIndex - 1));
+            } else if (key.downArrow) {
+                setFocusedAgentIndex(Math.min(lastAgentIndex, focusedAgentIndex + 1));
+            } else if (key.return) {
+                const agent = focusedCard.agents[focusedAgentIndex];
+                if (agent !== undefined) {
+                    onAttachAgent(focusedCard.repo, focusedCard.branch, agent.id);
+                }
+            } else if (key.escape) {
+                setFocusedAgentIndex(undefined);
+            }
+        },
+        { isActive: isFocused && focusedAgentIndex !== undefined },
     );
 
     if (filtered.length === 0) {
@@ -119,15 +163,17 @@ export function Grid({ cards, selectedRepo, isFocused, onPageInfoChange }: GridP
 
     return (
         <Box flexGrow={1} flexDirection="row" flexWrap="wrap" alignContent="flex-start" padding={1}>
-            {visibleCards.map(
-                (card, offset): JSX.Element => (
+            {visibleCards.map((card, offset): JSX.Element => {
+                const cardIsFocused = isFocused && pageStart + offset === effectiveIndex;
+                return (
                     <WorktreeCardView
                         key={`${card.repo}/${card.branch}`}
                         card={card}
-                        isFocused={isFocused && pageStart + offset === effectiveIndex}
+                        isFocused={cardIsFocused}
+                        focusedAgentIndex={cardIsFocused ? focusedAgentIndex : undefined}
                     />
-                ),
-            )}
+                );
+            })}
         </Box>
     );
 }
@@ -153,10 +199,12 @@ const AGENT_STATUS_DISPLAY: Record<AgentState, { readonly glyph: string; readonl
 interface WorktreeCardViewProps {
     readonly card: WorktreeStatus;
     readonly isFocused: boolean;
+    /** Row-cursor position within `card.agents`, or `undefined` when not in agent-row focus mode. */
+    readonly focusedAgentIndex: number | undefined;
 }
 
 /** One worktree card: repo/branch kicker (left, own bounded width) beside a status badge (right, own reserved width), a container meta line, and its agent sessions. */
-function WorktreeCardView({ card, isFocused }: WorktreeCardViewProps): JSX.Element {
+function WorktreeCardView({ card, isFocused, focusedAgentIndex }: WorktreeCardViewProps): JSX.Element {
     const { glyph, color, label } = STATUS_DISPLAY[card.status];
     const meta =
         card.status === "running" || card.status === "attention"
@@ -194,7 +242,7 @@ function WorktreeCardView({ card, isFocused }: WorktreeCardViewProps): JSX.Eleme
                 {meta}
             </Text>
             <Text dimColor>{"─".repeat(CARD_WIDTH - 4)}</Text>
-            <AgentRows agents={card.agents} />
+            <AgentRows agents={card.agents} selectedIndex={focusedAgentIndex} />
         </Box>
     );
 }
@@ -202,36 +250,109 @@ function WorktreeCardView({ card, isFocused }: WorktreeCardViewProps): JSX.Eleme
 /** Props for {@link AgentRows}. */
 interface AgentRowsProps {
     readonly agents: readonly AgentInfo[];
+    /** Row-cursor position to highlight, or `undefined` to use the plain "+N more" collapse. */
+    readonly selectedIndex: number | undefined;
 }
 
-/** Up to {@link MAX_AGENT_ROWS} agent-session lines, collapsing any excess into a trailing "+N more" line. */
-function AgentRows({ agents }: AgentRowsProps): JSX.Element {
+/**
+ * Up to {@link MAX_AGENT_ROWS} agent-session lines.
+ *
+ * With no selection, collapses any excess into a trailing "+N more" line. With a
+ * selection, instead renders a sliding window of size {@link MAX_AGENT_ROWS} kept
+ * centered on `selectedIndex` — so row-cursor mode can reach every agent without
+ * growing the card past its fixed height — with `↑`/`↓ N more` cues in place of a
+ * clipped edge row.
+ */
+function AgentRows({ agents, selectedIndex }: AgentRowsProps): JSX.Element {
     if (agents.length === 0) {
         return <Text dimColor>No agents</Text>;
     }
 
-    const overflowCount = agents.length > MAX_AGENT_ROWS ? agents.length - (MAX_AGENT_ROWS - 1) : 0;
-    const visibleCount = overflowCount > 0 ? MAX_AGENT_ROWS - 1 : agents.length;
+    if (selectedIndex === undefined) {
+        const overflowCount = agents.length > MAX_AGENT_ROWS ? agents.length - (MAX_AGENT_ROWS - 1) : 0;
+        const visibleCount = overflowCount > 0 ? MAX_AGENT_ROWS - 1 : agents.length;
+        return (
+            <>
+                {agents.slice(0, visibleCount).map((agent): JSX.Element => <AgentRow key={agent.id} agent={agent} isSelected={false} />)}
+                {overflowCount > 0 && <Text dimColor>{`+${overflowCount} more`}</Text>}
+            </>
+        );
+    }
+
+    const clampedIndex = Math.max(0, Math.min(selectedIndex, agents.length - 1));
+    const { start, end, showTopCue, showBottomCue } = computeAgentWindow(agents.length, clampedIndex, MAX_AGENT_ROWS);
 
     return (
         <>
-            {agents.slice(0, visibleCount).map((agent): JSX.Element => <AgentRow key={agent.id} agent={agent} />)}
-            {overflowCount > 0 && <Text dimColor>{`+${overflowCount} more`}</Text>}
+            {showTopCue && <Text dimColor>{`↑ ${start} more`}</Text>}
+            {agents.slice(start, end).map((agent, offset): JSX.Element => (
+                <AgentRow key={agent.id} agent={agent} isSelected={start + offset === clampedIndex} />
+            ))}
+            {showBottomCue && <Text dimColor>{`↓ ${agents.length - end} more`}</Text>}
         </>
     );
+}
+
+/** A sliding window into an agent list, kept centered on the selected index within a fixed row budget. */
+interface AgentWindow {
+    /** First visible agent index (inclusive). */
+    readonly start: number;
+    /** Last visible agent index (exclusive). */
+    readonly end: number;
+    /** Whether a "more above" cue row is needed, consuming one row from `windowSize`. */
+    readonly showTopCue: boolean;
+    /** Whether a "more below" cue row is needed, consuming one row from `windowSize`. */
+    readonly showBottomCue: boolean;
+}
+
+/**
+ * Computes a fixed-`windowSize`-row window over `total` agents that keeps `selectedIndex`
+ * visible, shrinking the content rows to make room for a top/bottom cue as needed.
+ * @param total - Total agent count.
+ * @param selectedIndex - Index to keep visible, already clamped to `[0, total - 1]`.
+ * @param windowSize - Total rows available (cue rows included).
+ * @returns The resolved window — see {@link AgentWindow}.
+ */
+function computeAgentWindow(total: number, selectedIndex: number, windowSize: number): AgentWindow {
+    if (total <= windowSize) {
+        return { start: 0, end: total, showTopCue: false, showBottomCue: false };
+    }
+
+    let showTopCue = false;
+    let showBottomCue = false;
+    // Converges in at most 2 passes: each pass can only ever flip a cue from off to
+    // on (never back off), so the loop settles once both cues stop changing.
+    for (let pass = 0; pass < 2; pass++) {
+        const contentRows: number = windowSize - (showTopCue ? 1 : 0) - (showBottomCue ? 1 : 0);
+        const start: number = Math.max(0, Math.min(selectedIndex - Math.floor((contentRows - 1) / 2), total - contentRows));
+        const end: number = start + contentRows;
+        const nextShowTopCue: boolean = start > 0;
+        const nextShowBottomCue: boolean = end < total;
+        if (nextShowTopCue === showTopCue && nextShowBottomCue === showBottomCue) {
+            return { start, end, showTopCue, showBottomCue };
+        }
+        showTopCue = nextShowTopCue;
+        showBottomCue = nextShowBottomCue;
+    }
+
+    const contentRows = windowSize - (showTopCue ? 1 : 0) - (showBottomCue ? 1 : 0);
+    const start = Math.max(0, Math.min(selectedIndex - Math.floor((contentRows - 1) / 2), total - contentRows));
+    return { start, end: start + contentRows, showTopCue, showBottomCue };
 }
 
 /** Props for {@link AgentRow}. */
 interface AgentRowProps {
     readonly agent: AgentInfo;
+    /** Whether this row is the row-cursor's current selection. */
+    readonly isSelected: boolean;
 }
 
 /** One agent session line: status dot, session name, state label (or what it's waiting on, if blocked), and elapsed runtime. */
-function AgentRow({ agent }: AgentRowProps): JSX.Element {
+function AgentRow({ agent, isSelected }: AgentRowProps): JSX.Element {
     const { glyph, color, label } = AGENT_STATUS_DISPLAY[agent.state];
     const statusText = agent.state === "blocked" && agent.waitingFor !== undefined ? agent.waitingFor : label;
     return (
-        <Text wrap="truncate-end">
+        <Text wrap="truncate-end" inverse={isSelected}>
             <Text color={color}>{glyph}</Text>
             {` ${agent.name ?? agent.id}  ${statusText} · ${formatElapsed(agent.startedAt)}`}
         </Text>
