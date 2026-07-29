@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { JSX } from "react";
 import { Box, Text, useInput } from "ink";
 
-const HINTS = "↑↓←→ move   PgUp/PgDn page   ⏎ agent   / command   q quit";
+const HINTS = "↑↓ move   ⇥ pane   ⏎ attach   ⎋ back   / command   q quit";
 const IDLE_HINT = "press / to enter a command";
 
 /** Props for {@link PromptBar}. */

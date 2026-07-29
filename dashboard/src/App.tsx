@@ -2,23 +2,19 @@ import { useMemo, useState } from "react";
 import type { JSX } from "react";
 import { Box, render, useApp, useInput } from "ink";
 import type { Instance } from "ink";
-import { Grid, type GridPageInfo } from "./components/Grid.tsx";
-import { PaginationBar } from "./components/PaginationBar.tsx";
+import { AgentDetail } from "./components/AgentDetail.tsx";
+import { ContainerDetail } from "./components/ContainerDetail.tsx";
 import { PromptBar } from "./components/PromptBar.tsx";
-import { Sidebar } from "./components/Sidebar.tsx";
+import { WorktreeList, type FocusedPane } from "./components/WorktreeList.tsx";
 import { useDashboardState } from "./hooks/useDashboardState.ts";
 import { useTerminalSize } from "./hooks/useTerminalSize.ts";
 import { logError } from "./lib/log.ts";
 import { runCommand } from "./lib/runCommand.ts";
-import { selectRepoSummaries, type RepoSummary } from "./state/selectors/repoSummaries.ts";
 import { selectWorktreeStatuses, type WorktreeStatus } from "./state/selectors/worktreeStatuses.ts";
 import { refreshDashboardState } from "./state/store.ts";
 
 /** Whether the prompt bar is idle or capturing a `/`-triggered command. */
 type Mode = "normal" | "command";
-
-/** Which of the two focusable regions currently routes arrow-key input. */
-type FocusRegion = "sidebar" | "grid";
 
 let instance: Instance;
 
@@ -47,7 +43,7 @@ async function handleRunCommand(
 }
 
 /**
- * Root component: sidebar + content area above a pinned prompt bar.
+ * Root component: worktree list + detail column above a pinned prompt bar.
  * @returns The rendered dashboard.
  */
 export function App(): JSX.Element {
@@ -55,14 +51,10 @@ export function App(): JSX.Element {
   const { rows } = useTerminalSize();
   const [mode, setMode] = useState<Mode>("normal");
   const state = useDashboardState();
-  const summaries = useMemo((): RepoSummary[] => selectRepoSummaries(state), [state]);
   const cards = useMemo((): WorktreeStatus[] => selectWorktreeStatuses(state), [state]);
-  const [selectedRepo, setSelectedRepo] = useState<string | undefined>(
-    undefined,
-  );
-  const [focusRegion, setFocusRegion] = useState<FocusRegion>("sidebar");
-  const [pageInfo, setPageInfo] = useState<GridPageInfo | undefined>(undefined);
   const [focusedCard, setFocusedCard] = useState<WorktreeStatus | undefined>(undefined);
+  const [focusedPane, setFocusedPane] = useState<FocusedPane>("list");
+  const [focusedAgentIndex, setFocusedAgentIndex] = useState<number | undefined>(undefined);
 
   useInput(
     (input, key): void => {
@@ -70,10 +62,6 @@ export function App(): JSX.Element {
         exit();
       } else if (input === "/") {
         setMode("command");
-      } else if (key.tab) {
-        setFocusRegion(
-          (region): FocusRegion => (region === "sidebar" ? "grid" : "sidebar"),
-        );
       }
     },
     { isActive: mode === "normal" },
@@ -114,21 +102,17 @@ export function App(): JSX.Element {
   return (
     <Box flexDirection="column" width="100%" height={rows}>
       <Box flexGrow={1} flexDirection="row">
-        <Sidebar
-          summaries={summaries}
-          isFocused={mode === "normal" && focusRegion === "sidebar"}
-          onSelectRepo={setSelectedRepo}
+        <WorktreeList
+          isActive={mode === "normal"}
+          cards={cards}
+          onFocusedCardChange={setFocusedCard}
+          onFocusedPaneChange={setFocusedPane}
+          onFocusedAgentIndexChange={setFocusedAgentIndex}
+          onAttachAgent={handleAttachAgent}
         />
-        <Box flexDirection="column" flexGrow={1}>
-          <Grid
-            cards={cards}
-            selectedRepo={selectedRepo}
-            isFocused={mode === "normal" && focusRegion === "grid"}
-            onPageInfoChange={setPageInfo}
-            onAttachAgent={handleAttachAgent}
-            onFocusedCardChange={setFocusedCard}
-          />
-          <PaginationBar info={pageInfo} />
+        <Box flexDirection="column">
+          <ContainerDetail card={focusedCard} isFocused={focusedPane === "container"} />
+          <AgentDetail card={focusedCard} isFocused={focusedPane === "agents"} focusedAgentIndex={focusedAgentIndex} />
         </Box>
       </Box>
       <PromptBar
