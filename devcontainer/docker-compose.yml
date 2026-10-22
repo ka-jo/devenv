@@ -7,8 +7,8 @@ services:
     volumes:
       - ${WORKSPACE_DIR}:/workspace:cached
       # Mount only the specific host ~/.claude entries the container needs, not the
-      # whole directory: config (install.sh's symlink targets — Docker resolves each
-      # through the host symlink to ../devenv/claude/... transparently, so edits still
+      # whole directory: config (real host directories of per-child symlinks into
+      # ../devenv/claude/..., which resolve via the ~/devenv mount below, so edits still
       # propagate live) plus auth, so every container stays logged in without its own
       # `claude login` (assumes both files already exist on the host — run `claude
       # login` there first if they don't). Everything else under ~/.claude —
