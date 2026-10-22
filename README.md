@@ -84,7 +84,6 @@ devenv container down <repo> <branch>          stop a worktree's dev container (
 devenv container attach <repo> <branch>        exec a zsh shell in a running dev container
 devenv container list                          list running devenv-managed containers, including the shared stack
 devenv install-extension [--skip-build]        install the egress approver VS Code extension on Windows
-devenv devcontainer [--name <name>]            (legacy, currently unmaintained — see below)
 ```
 
 ### Working with git worktrees
@@ -151,7 +150,3 @@ devcontainer/infra/firewall/denied_domains.txt
 One domain per line; a leading `.` matches subdomains, e.g. `.github.com`. Changes are picked up **live** — the firewall watches the files and reconfigures Squid on save, no rebuild needed. These files are gitignored and seeded once, ever, from the tracked `*.default` templates in the same directory (skip-if-exists) — edit the seeded copy, not the `.default` templates, to change what any worktree can reach.
 
 > **Known gap (TODO):** these files live inside `~/devenv`, which every dev container bind-mounts **read-write** at `/home/ka-jo/devenv` (for the `~/.claude` symlink trick). That means a sandboxed process inside the container can currently reach its own allowlist through that mount — this isn't a real trust boundary yet. A fix (e.g. a read-only remount, or moving the live files back outside the repo) is intentionally deferred rather than solved here.
-
-### `devenv devcontainer` (legacy, currently unmaintained)
-
-For a project **not** managed as a `devenv worktree` checkout, `devenv devcontainer` copies `devcontainer/` into a project-local `.devcontainer/` instead of using `devenv container up`. It predates the switch to the CLI-managed container lifecycle and the shared firewall stack, and has not been kept in sync with either — it still expects a `devcontainer.json` that no longer exists in `devcontainer/`, and the `docker-compose.yml` it copies is now the app-only service (no bundled firewall/approver). Treat it as broken until someone specifically revives it; per `CLAUDE.md`, new work should extend `devcontainer/docker-compose.yml` + `lib/container.sh` instead of this path.
