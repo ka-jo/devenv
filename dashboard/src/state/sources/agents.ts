@@ -4,6 +4,9 @@ import { REPO_DIR } from "../../lib/paths.ts";
 /** Absolute path to the shared devcontainer compose file every worktree's container is defined by. */
 const COMPOSE_FILE = path.join(REPO_DIR, "devcontainer/docker-compose.yml");
 
+/** Where {@link REPO_DIR} is mounted inside every worktree's container. */
+const CONTAINER_REPO_DIR = "/home/ka-jo/devenv";
+
 /** Lifecycle state of one Claude Code background agent session, per `claude agents --json`. */
 export type AgentState = "working" | "blocked" | "done" | "failed" | "stopped";
 
@@ -59,14 +62,13 @@ export async function listBackgroundAgents(
       "--json",
       "--all",
       "--cwd",
-      "/workspace",
+      // Mirrors CT_WORKDIR (lib/container.sh): worktrees are mounted at their
+      // ~/devenv-relative path under the container user's home, not /workspace.
+      path.posix.join(CONTAINER_REPO_DIR, path.relative(REPO_DIR, worktreePath)),
     ],
     {
-      // WORKSPACE_DIR isn't needed for `exec` to find the container — only `up` uses
-      // it — but compose still interpolates it from the file, so set it to avoid a warning.
       env: {
         ...process.env,
-        WORKSPACE_DIR: worktreePath,
         COMPOSE_PROJECT_NAME: projectName,
       },
       stdout: "pipe",

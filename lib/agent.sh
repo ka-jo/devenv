@@ -31,10 +31,10 @@ _agent_resolve_running() {
     _container_write_env
 }
 
-# Prints `claude agents --json --all --cwd /workspace` for the worktree
+# Prints `claude agents --json --all --cwd <workdir>` for the worktree
 # container last resolved via _agent_resolve_running/_container_resolve.
 _agent_list_json() {
-    _container_compose exec -T devcontainer "$CLAUDE_WRAPPER" agents --json --all --cwd /workspace
+    _container_compose exec -T devcontainer "$CLAUDE_WRAPPER" agents --json --all --cwd "$CT_WORKDIR"
 }
 
 # Resolves a devenv agent `name` (optional) to a claude session id, scoped to

@@ -19,10 +19,8 @@ services:
       # entries on behalf of the host-side extension (which cannot write WSL files
       # directly). The firewall container mounts the same host files read-only;
       # inotify there picks up writes made here because they share the same inode.
-      # TODO: SHARED_FIREWALL_DIR (lib/container.sh) currently lives inside the
-      # repo (devcontainer/infra/firewall/), which every app container bind-mounts
-      # read-write at ~/devenv — a sandboxed process can currently reach its own
-      # allowlist through that mount. Not a real trust boundary yet; revisit.
+      # SHARED_FIREWALL_DIR lives inside ~/devenv, which app containers mount
+      # read-only — this approver is the only container that can write it.
       - ${SHARED_FIREWALL_DIR}/allowed_domains.txt:/etc/approver/allowed_domains.txt
       - ${SHARED_FIREWALL_DIR}/denied_domains.txt:/etc/approver/denied_domains.txt
     environment:

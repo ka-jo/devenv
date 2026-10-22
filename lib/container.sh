@@ -1,11 +1,13 @@
 SHARED_PN="devenv-shared"
 SHARED_PROXY_NET="devenv-shared_proxy_net"
-# TODO: this puts the live allowlist inside ~/devenv, which every app
-# container bind-mounts read-write at /home/ka-jo/devenv (for the ~/.claude
-# symlink trick) — a sandboxed process can currently reach its own allowlist
-# through that mount. Revisit (e.g. a read-only remount, or moving the file
-# back out of the repo) before relying on this as a real trust boundary.
+# Lives inside ~/devenv, which app containers mount read-only — only the
+# approver (never an app container) writes it.
 SHARED_FIREWALL_DIR="$REPO_DIR/devcontainer/infra/firewall"
+# Where ~/devenv is mounted inside every app container. Worktrees are mounted at
+# their mirrored path under it (not /workspace) so the relative gitdir links
+# written by `git worktree add --relative-paths` resolve the same as on the host.
+CT_DEVENV_DIR="/home/ka-jo/devenv"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/devenv"
 
 _container_ensure_volume() {
     local name="$1"
@@ -19,7 +21,9 @@ _compose_project_name() {
     printf '%s-%s' "$1" "$(printf '%s' "$2" | tr '[:upper:]/' '[:lower:]-' | tr -cs 'a-z0-9-' '-')"
 }
 
-# Sets globals: CT_PATH (worktree checkout path), CT_PN (compose project name)
+# Sets globals: CT_REPO, CT_PATH (worktree checkout path), CT_PN (compose
+# project name), CT_WORKDIR (CT_PATH's mirrored path inside the container),
+# CT_STATE (host-only generated files, outside every container's mounts)
 _container_resolve() {
     local repo="$1" branch="$2"
     if [[ -z "$repo" || -z "$branch" ]]; then
@@ -34,7 +38,10 @@ _container_resolve() {
         exit 1
     fi
 
+    CT_REPO="$repo"
     CT_PN="$(_compose_project_name "$repo" "$branch")"
+    CT_WORKDIR="$CT_DEVENV_DIR/${CT_PATH#"$REPO_DIR/"}"
+    CT_STATE="$STATE_DIR/$CT_PN"
 }
 
 # Opens VS Code attached to the running container for the worktree last
@@ -48,18 +55,61 @@ _open_vscode() {
     local container_name="${CT_PN}-devcontainer"
     local hex
     hex="$(printf '%s' "$container_name" | od -An -tx1 | tr -d ' \n')"
-    code --folder-uri "vscode-remote://attached-container+${hex}/workspace"
+    code --folder-uri "vscode-remote://attached-container+${hex}${CT_WORKDIR}"
 }
 
 _container_write_env() {
     cat > "$CT_PATH/.devenv" <<EOF
-WORKSPACE_DIR=$CT_PATH
 COMPOSE_PROJECT_NAME=$CT_PN
 EOF
+    _container_write_override
+}
+
+# Generates the per-worktree compose override: this worktree and its bare repo
+# read-write at their mirrored paths, every other repo's bare .git read-only,
+# and read-only pins over everything git takes config/hooks from. Without
+# those pins a sandboxed process could plant core.hooksPath/core.fsmonitor (or
+# repoint a worktree's .git file or commondir at a config it controls) and get
+# code execution on the host the next time git runs there.
+#
+# Known gap: submodule git dirs (<bare>/modules/) stay writable, so the same
+# applies to host-side submodule commands in repos that use submodules.
+_container_write_override() {
+    local bare="$WORKTREES_DIR/$CT_REPO/.git" gitdir admin other others=()
+    gitdir="$(sed -n 's/^gitdir: //p' "$CT_PATH/.git")"
+    if [[ "$gitdir" == /* ]]; then
+        echo "error: $CT_PATH has an absolute gitdir link, which can't resolve inside the container" >&2
+        echo "  fix: git -C $CT_PATH worktree repair --relative-paths" >&2
+        exit 1
+    fi
+    admin="$(realpath -m "$CT_PATH/$gitdir")"
+    for other in "$WORKTREES_DIR"/*/.git; do
+        [[ -d "$other" && "$other" != "$bare" ]] && others+=("$other")
+    done
+    mkdir -p "$CT_STATE" "$bare/hooks"
+
+    jq -n \
+        --arg host "$REPO_DIR" --arg ct "$CT_DEVENV_DIR" \
+        --arg wt "$CT_PATH" --arg bare "$bare" --arg admin "$admin" '
+        def bind($ro): {type: "bind", source: ., target: ($ct + ltrimstr($host)), read_only: $ro};
+        {services: {devcontainer: {
+            working_dir: ($ct + ($wt | ltrimstr($host))),
+            volumes: ([
+                ($wt | bind(false)),
+                ($wt + "/.git" | bind(true)),
+                ($bare | bind(false)),
+                ($bare + "/config" | bind(true)),
+                ($bare + "/hooks" | bind(true)),
+                ($bare + "/worktrees" | bind(true)),
+                ($admin | bind(false)),
+                ($admin + "/commondir" | bind(true))
+            ] + [$ARGS.positional[] | bind(true)])
+        }}}' --args "${others[@]}" > "$CT_STATE/override.json"
 }
 
 _container_compose() {
-    docker compose -p "$CT_PN" --env-file "$CT_PATH/.devenv" -f "$REPO_DIR/devcontainer/docker-compose.yml" "$@"
+    docker compose -p "$CT_PN" --env-file "$CT_PATH/.devenv" \
+        -f "$REPO_DIR/devcontainer/docker-compose.yml" -f "$CT_STATE/override.json" "$@"
 }
 
 # --- shared firewall+approver stack (one instance total, not per-worktree) ---

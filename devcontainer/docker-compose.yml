@@ -4,8 +4,11 @@ services:
     build:
       dockerfile: Dockerfile
     command: sleep infinity
+    # The worktree itself, its bare repo, and the git hardening mounts are
+    # per-repo, so they're generated into an override file by
+    # _container_write_override (lib/container.sh), not declared here. That
+    # override also sets working_dir.
     volumes:
-      - ${WORKSPACE_DIR}:/workspace:cached
       # Mount only the specific host ~/.claude entries the container needs, not the
       # whole directory: config (real host directories of per-child symlinks into
       # ../devenv/claude/..., which resolve via the ~/devenv mount below, so edits still
@@ -35,11 +38,19 @@ services:
       # cwd, so cross-container sharing doesn't reintroduce that specific bug — but
       # concurrent writers can still race/clobber each other's updates to it.
       - ${HOME}/.claude.json:/home/ka-jo/.claude.json
-      - ${HOME}/devenv:/home/ka-jo/devenv
+      # Read-only: the container only needs to resolve the ~/.claude symlinks
+      # and run bin/ from here. Keeping it read-only also keeps the firewall
+      # allowlist (devcontainer/infra/firewall/) and this compose file out of a
+      # sandboxed process's reach.
+      - ${HOME}/devenv:/home/ka-jo/devenv:ro
+      # Hide every repo's checkouts (uncommitted work, gitignored secrets like
+      # .env). The override re-exposes only this worktree, plus every repo's
+      # bare .git read-only (committed history, for cross-project research).
+      - type: tmpfs
+        target: /home/ka-jo/devenv/worktrees
       - ./managed-settings.json:/etc/claude-code/managed-settings.json:ro
       - pnpm-store:/home/ka-jo/.pnpm-store
       - zsh-history:/home/ka-jo/commandhistory
-    working_dir: /workspace
     environment:
       HISTFILE: /home/ka-jo/commandhistory/.zsh_history
       HTTP_PROXY: http://firewall:3128
