@@ -6,7 +6,7 @@ SHARED_FIREWALL_DIR="$REPO_DIR/devcontainer/infra/firewall"
 # Where ~/devenv is mounted inside every app container. Worktrees are mounted at
 # their mirrored path under it (not /workspace) so the relative gitdir links
 # written by `git worktree add --relative-paths` resolve the same as on the host.
-CT_DEVENV_DIR="/home/ka-jo/devenv"
+CONTAINER_REPO_DIR="/home/ka-jo/devenv"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/devenv"
 
 _container_ensure_volume() {
@@ -40,7 +40,7 @@ _container_resolve() {
 
     CT_REPO="$repo"
     CT_PN="$(_compose_project_name "$repo" "$branch")"
-    CT_WORKDIR="$CT_DEVENV_DIR/${CT_PATH#"$REPO_DIR/"}"
+    CT_WORKDIR="$CONTAINER_REPO_DIR/${CT_PATH#"$REPO_DIR/"}"
     CT_STATE="$STATE_DIR/$CT_PN"
 }
 
@@ -82,7 +82,7 @@ _container_write_override() {
     mkdir -p "$CT_STATE" "$bare/hooks"
 
     jq -n \
-        --arg host "$REPO_DIR" --arg ct "$CT_DEVENV_DIR" \
+        --arg host "$REPO_DIR" --arg ct "$CONTAINER_REPO_DIR" \
         --arg wt "$CT_PATH" --arg bare "$bare" --arg admin "$admin" '
         def bind($ro): {type: "bind", source: ., target: ($ct + ltrimstr($host)), read_only: $ro};
         {services: {devcontainer: {
