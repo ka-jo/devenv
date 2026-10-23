@@ -28,7 +28,7 @@ workdir="$(mktemp -d)"
 trap 'rm -rf "${workdir}"' EXIT
 
 cd "${workdir}"
-curl -fsSLo git.tar.gz "https://mirrors.edge.kernel.org/pub/software/scm/git/git-${GIT_VERSION}.tar.gz"
+curl -fsSLo git.tar.gz "https://cdn.kernel.org/pub/software/scm/git/git-${GIT_VERSION}.tar.gz"
 echo "${GIT_SHA256}  git.tar.gz" | sha256sum -c -
 
 tar xzf git.tar.gz
