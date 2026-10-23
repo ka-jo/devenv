@@ -15,7 +15,9 @@ if [ "$REPO_DIR" != "$EXPECTED_DIR" ]; then
 fi
 
 source "$REPO_DIR/lib/link.sh"
+source "$REPO_DIR/lib/update.sh"
 cmd_link
+_install_deps
 
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"

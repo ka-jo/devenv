@@ -1,0 +1,10 @@
+{
+  "name": "devenv",
+  "private": true,
+  "workspaces": [
+    "dashboard"
+  ],
+  "devDependencies": {
+    "@devcontainers/cli": "0.89.0"
+  }
+}

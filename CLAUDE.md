@@ -12,7 +12,7 @@ Personal dev environment config with two payloads:
 
 3. **`dashboard/`** — an Ink (React for CLI) TUI, run on **Bun** (`devenv dashboard`, via `lib/dashboard.sh`), for monitoring worktrees/containers/agents at a glance. Runs on the host only — it shells out to `docker`/`git worktree` directly and needs no devcontainer. Not a port of anything; built from the design handoff in `design_handoff_worktree_dashboard/README.md` (kept outside this repo).
 
-There is no build, test, or lint step for the bash CLI. `dashboard/` is the one payload with real dependencies (`bun install`), managed independently of the rest of the repo.
+There is no build, test, or lint step for the bash CLI. The repo root is a **Bun workspace** (`package.json` + committed `bun.lock`, isolated linker): `dashboard/` is its one member, and `@devcontainers/cli` is pinned exactly as a root devDependency (its bin runs under the host's Node ≥ 20, not Bun). `install.sh` and `devenv update` run `bun install --frozen-lockfile` at the root. `devcontainer/infra/approver` and `vsc-extension` are deliberately not workspace members — the approver's Docker build context is its own directory, which a root lockfile would sit outside of. Type-check the dashboard with `bun x tsc --noEmit -p dashboard`.
 
 ## Hard invariants
 
@@ -33,7 +33,7 @@ For a new child inside an existing linked directory, run `devenv link`. For a ne
 
 ## CLI
 
-- `devenv update` — `git pull` in `~/devenv`, then `devenv link`.
+- `devenv update` — `git pull` in `~/devenv`, then `devenv link`, then `bun install --frozen-lockfile`.
 - `devenv link` — (re)link `claude/` entries into `~/.claude/`; prunes dangling links.
 - `devenv install-extension [--skip-build]` — build and install the egress approver VS Code extension on Windows.
 - `devenv clone <url> [name]` — bare-clone into `worktrees/<name>/.git`, checkout the default branch as a worktree.
@@ -42,7 +42,7 @@ For a new child inside an existing linked directory, run `devenv link`. For a ne
 - `devenv container down <repo> <branch>` — stop that worktree's stack. Also tears down the shared `devenv-shared` stack if this was the last worktree attached to it.
 - `devenv container attach <repo> <branch>` — exec a zsh shell in the running dev container (VS Code can separately "Attach to Running Container" using the same `${COMPOSE_PROJECT_NAME}-devcontainer` container name).
 - `devenv container list` — list running devenv-managed container stacks.
-- `devenv dashboard` — launch the Ink TUI (`dashboard/`, requires Bun on the host; run `bun install` in `dashboard/` first).
+- `devenv dashboard` — launch the Ink TUI (`dashboard/`, requires Bun on the host; dependencies come from the root workspace install).
 
 ## Commit conventions
 

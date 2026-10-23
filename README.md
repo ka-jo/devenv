@@ -28,11 +28,13 @@ devcontainer/                 # dev container base — referenced directly by `d
       start.sh                  #      launches squid, watches allowed_domains.txt, SIGHUPs on change
       verify.sh                 #      check: allowed domains reachable, others blocked
 vsc-extension/                 # VS Code extension: host-side UI for approving/denying egress requests
+dashboard/                    # Ink TUI (Bun) for monitoring worktrees/containers/agents: `devenv dashboard`
+package.json, bun.lock        # Bun workspace root: dashboard + pinned @devcontainers/cli (run under Node)
 bin/
   devenv                      # CLI entry point: `devenv update`, `devenv container`, ...
   claude-wrapper               # process wrapper referenced by the dev container's claudeCode.claudeProcessWrapper
 lib/                         # one file per devenv subcommand, sourced by bin/devenv
-install.sh                    # symlinks claude/* into ~/.claude and installs the `devenv` CLI
+install.sh                    # symlinks claude/* into ~/.claude, installs the `devenv` CLI and workspace deps
 worktrees/                    # gitignored — repos managed by `devenv clone`/`devenv worktree`, see below
 ```
 
@@ -46,7 +48,7 @@ cd ~/devenv
 ./install.sh
 ```
 
-This does two things:
+This does three things:
 
 **1.** Creates a **relative** symlink in `~/.claude/` for every entry in `claude/`:
 
@@ -63,6 +65,8 @@ Each entry is an explicit `link_relative` call in `install.sh`. To add a new top
 
 **2.** Symlinks `bin/devenv` into `~/.local/bin/devenv` so the CLI is on `$PATH`.
 
+**3.** Runs `bun install --frozen-lockfile` at the repo root, installing the Bun workspace's pinned dependencies (the dashboard's, plus `@devcontainers/cli`). Requires [Bun](https://bun.sh) and Node ≥ 20 on the host — the devcontainer CLI runs under Node.
+
 Runtime state Claude Code writes into `~/.claude/` itself — `sessions/`, `projects/`, `history.jsonl`, `.credentials.json`, `settings.json`, `cache/`, etc. — is deliberately **not** symlinked. That state stays local to each machine.
 
 ### Why `~/devenv` is required
@@ -74,7 +78,7 @@ Hard-requiring `~/devenv` keeps `install.sh` simple (no auto-healing symlink lay
 ## The `devenv` CLI
 
 ```
-devenv update                                  pull the latest devenv repo
+devenv update                                  pull the latest devenv repo, relink, reinstall workspace deps
 devenv clone <url> [name]                      bare-clone a repo into worktrees/<name>/.git + checkout its default branch
 devenv worktree add <repo> <branch> [base]     add a worktree at worktrees/<repo>/<branch>
 devenv worktree rm <repo> <branch> [--force]   remove a worktree and delete its local branch
