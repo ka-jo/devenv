@@ -46,8 +46,13 @@ services:
       # Hide every repo's checkouts (uncommitted work, gitignored secrets like
       # .env). The override re-exposes only this worktree, plus every repo's
       # bare .git read-only (committed history, for cross-project research).
+      # Read-only because it exists only to mask: writable, it would be an
+      # uncapped, RAM-backed scratch dir (sudo bypasses the root-owned
+      # mountpoint dirs) whose contents vanish on `down`. The binds layered on
+      # top keep their own modes.
       - type: tmpfs
         target: /home/ka-jo/devenv/worktrees
+        read_only: true
       - ./managed-settings.json:/etc/claude-code/managed-settings.json:ro
       - pnpm-store:/home/ka-jo/.pnpm-store
       - zsh-history:/home/ka-jo/commandhistory
