@@ -121,7 +121,7 @@ devenv container down my-repo feature/my-branch    # stop
 devenv container list                              # see what's running, across all worktrees
 ```
 
-`up` references `devcontainer/docker-compose.yml` directly (nothing is copied into the worktree) and regenerates `<worktree>/.devenv` (`COMPOSE_PROJECT_NAME`) plus a per-worktree mount override (`~/.local/state/devenv/<project>/override.json`) each run — a flat dotfile at the worktree root, deliberately not named `.devcontainer/` since that name is reserved for actual devcontainer.json-style tooling. There's no `devcontainer.json` and VS Code doesn't own the container lifecycle here — start/stop it with the CLI, and if you want VS Code attached, use **Attach to Running Container** against `${COMPOSE_PROJECT_NAME}-devcontainer` (i.e. `<repo>-<branch>-devcontainer`) once it's up.
+`up` references `devcontainer/docker-compose.yml` directly (nothing is copied into the worktree) and regenerates a per-worktree mount override (`~/.local/state/devenv/<project>/override.json`, outside every container's mounts) each run. There's no `devcontainer.json` and VS Code doesn't own the container lifecycle here — start/stop it with the CLI, and if you want VS Code attached, use **Attach to Running Container** against `${COMPOSE_PROJECT_NAME}-devcontainer` (i.e. `<repo>-<branch>-devcontainer`) once it's up.
 
 Each worktree's container:
 

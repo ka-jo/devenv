@@ -58,13 +58,6 @@ _open_vscode() {
     code --folder-uri "vscode-remote://attached-container+${hex}${CT_WORKDIR}"
 }
 
-_container_write_env() {
-    cat > "$CT_PATH/.devenv" <<EOF
-COMPOSE_PROJECT_NAME=$CT_PN
-EOF
-    _container_write_override
-}
-
 # Generates the per-worktree compose override: this worktree and its bare repo
 # read-write at their mirrored paths, every other repo's bare .git read-only,
 # and read-only pins over everything git takes config/hooks from. Without
@@ -108,7 +101,7 @@ _container_write_override() {
 }
 
 _container_compose() {
-    docker compose -p "$CT_PN" --env-file "$CT_PATH/.devenv" \
+    COMPOSE_PROJECT_NAME="$CT_PN" docker compose -p "$CT_PN" \
         -f "$REPO_DIR/devcontainer/docker-compose.yml" -f "$CT_STATE/override.json" "$@"
 }
 
@@ -168,7 +161,7 @@ cmd_container_up() {
     _container_resolve "$repo" "$branch"
     _shared_ensure_up
     _shared_wait_healthy
-    _container_write_env
+    _container_write_override
     _container_ensure_volume shared-pnpm-store
     _container_ensure_volume ka-jo-zsh-history
     _container_compose up -d --build
@@ -184,7 +177,7 @@ cmd_container_down() {
     fi
 
     _container_resolve "$repo" "$branch"
-    _container_write_env
+    _container_write_override
     _container_compose down
     _shared_maybe_down
     echo "down: $CT_PN"
@@ -202,7 +195,7 @@ cmd_container_attach() {
     fi
 
     _container_resolve "$repo" "$branch"
-    _container_write_env
+    _container_write_override
     if [[ "$code" -eq 1 ]]; then
         _open_vscode
     else

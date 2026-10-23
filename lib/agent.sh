@@ -28,7 +28,7 @@ _agent_resolve_running() {
         echo "error: no running container for $repo/$branch (run: devenv agent up $repo $branch)"
         exit 1
     fi
-    _container_write_env
+    _container_write_override
 }
 
 # Prints `claude agents --json --all --cwd <workdir>` for the worktree
@@ -100,7 +100,7 @@ cmd_agent_up() {
     _container_resolve "$repo" "$branch"
     _shared_ensure_up
     _shared_wait_healthy
-    _container_write_env
+    _container_write_override
     _container_ensure_volume shared-pnpm-store
     _container_ensure_volume ka-jo-zsh-history
     _container_compose up -d --build
@@ -155,7 +155,7 @@ cmd_agent_list() {
         for t in "${targets[@]}"; do
             r="${t%%$'\t'*}"; b="${t#*$'\t'}"
             _container_resolve "$r" "$b"
-            _container_write_env
+            _container_write_override
             _agent_list_json | jq -r --arg repo "$r" --arg branch "$b" \
                 '.[] | select(.kind=="background") | [$repo, $branch, .name, .id, .status, (.startedAt/1000 | gmtime | strftime("%Y-%m-%dT%H:%M:%SZ"))] | @tsv'
         done
