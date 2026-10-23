@@ -166,7 +166,9 @@ cmd_container_up() {
     _container_ensure_volume ka-jo-zsh-history
     _container_compose up -d --build
     echo "up: $CT_PN"
-    [[ "$code" -eq 1 ]] && _open_vscode
+    if [[ "$code" -eq 1 ]]; then
+        _open_vscode
+    fi
 }
 
 cmd_container_down() {
