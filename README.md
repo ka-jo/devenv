@@ -18,8 +18,9 @@ claude/                       # global Claude Code config — symlinked into ~/.
 devcontainer/                 # dev container base — referenced directly by `devenv container`, never copied
   docker-compose.yml          #   the app service only, joins the shared proxy_net (below) as its sole network
   devcontainer.json           #   default config: Features (common-utils, ./features/fnm) on top of the Dockerfile
-  Dockerfile                  #   Ubuntu 26.04 base + ka-jo user + Claude Code
+  Dockerfile                  #   Ubuntu 26.04 base, minus its stock UID-1000 user
   features/fnm/               #   local Feature: pinned, checksum-verified fnm + standalone pnpm
+  features/agent/             #   local Feature injected into every container: Claude Code, claude-wrapper alias, git >= 2.48 gate
   infra/                      #   Squid firewall + egress approver — ONE shared instance for all worktrees
     docker-compose.yml        #     approver + firewall services (see lib/container.sh _shared_*)
     approver/                 #     Bun/TypeScript egress approval broker (see approver/PROTOCOL.md)

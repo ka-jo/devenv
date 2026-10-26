@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 
-sudo chown ka-jo:ka-jo /home/ka-jo/.pnpm-store
+# Docker creates missing volume mountpoints root-owned.
+sudo chown ka-jo:ka-jo /home/ka-jo/.pnpm-store /home/ka-jo/commandhistory
 
 # Make the worktree's Node version fnm's default, so non-interactive processes
 # (agents included) get it too, not just interactive shells that cd here. Only

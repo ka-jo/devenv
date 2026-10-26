@@ -1,0 +1,16 @@
+{
+  "id": "agent",
+  "version": "1.0.0",
+  "name": "devenv agent tooling",
+  "description": "Claude Code (native installer) routed through devenv's claude-wrapper, the in-container devenv CLI link, and a git version gate for relative worktrees. Injected by devenv into every container it builds.",
+  "options": {
+    "devenvDir": {
+      "type": "string",
+      "default": "/home/ka-jo/devenv",
+      "description": "Where ~/devenv is mounted inside the container (CONTAINER_REPO_DIR in lib/container.sh)."
+    }
+  },
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/common-utils"
+  ]
+}

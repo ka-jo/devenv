@@ -11,6 +11,9 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/devenv"
 DEVCONTAINER_CLI="$REPO_DIR/node_modules/.bin/devcontainer"
 # The config used for any worktree whose project doesn't define its own.
 DEFAULT_CONFIG="$REPO_DIR/devcontainer/devcontainer.json"
+# devenv's local Features. `agent` is injected into every generated config;
+# the rest are available to configs that reference them as ./features/<id>.
+DEVENV_FEATURES_DIR="$REPO_DIR/devcontainer/features"
 
 _container_ensure_volume() {
     local name="$1"
@@ -113,7 +116,8 @@ _container_compose() {
 # Generates the devcontainer.json the CLI actually runs from: the source config
 # plus the per-worktree fields no devcontainer variable can express — the
 # mirrored workspaceFolder, and compose paths made absolute (the generated file
-# lives in CT_STATE, not beside its compose files) with override.json last.
+# lives in CT_STATE, not beside its compose files) with override.json last —
+# and the agent Feature, which every devenv container gets.
 _container_write_config() {
     local source="$DEFAULT_CONFIG" parsed
     _require_devcontainer_cli
@@ -124,19 +128,19 @@ _container_write_config() {
         exit 1
     }
     printf '%s' "$parsed" | jq \
-        --arg dir "$(dirname "$source")" --arg override "$CT_STATE/override.json" --arg wf "$CT_WORKDIR" '
+        --arg dir "$(dirname "$source")" --arg override "$CT_STATE/override.json" \
+        --arg wf "$CT_WORKDIR" --arg devenv "$CONTAINER_REPO_DIR" '
         .configuration
         | del(.configFilePath)
         | .dockerComposeFile = ([.dockerComposeFile | if type == "string" then [.] else . end | .[] | $dir + "/" + .] + [$override])
-        | .workspaceFolder = $wf' > "$CT_CONFIG"
+        | .workspaceFolder = $wf
+        | .features["./features/agent"] = {devenvDir: $devenv}' > "$CT_CONFIG"
 
     # The CLI resolves local Features ("./features/<id>") relative to the config
-    # file and rejects any outside a directory named .devcontainer — hence
-    # CT_CONFIG's location and copying them beside it.
+    # file, and only accepts them under <workspace-folder>/.devcontainer/ (see
+    # _devcontainer) — hence CT_CONFIG's location and copying them beside it.
     rm -rf "${CT_STATE:?}/.devcontainer/features"
-    if [[ -d "$(dirname "$source")/features" ]]; then
-        cp -r "$(dirname "$source")/features" "$CT_STATE/.devcontainer/features"
-    fi
+    cp -r "$DEVENV_FEATURES_DIR" "$CT_STATE/.devcontainer/features"
 }
 
 _require_devcontainer_cli() {

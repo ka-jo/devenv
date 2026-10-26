@@ -3,9 +3,13 @@
   "dockerComposeFile": ["docker-compose.yml"],
   "service": "devcontainer",
   "remoteUser": "ka-jo",
+  "containerUser": "ka-jo",
   "overrideCommand": false,
   "shutdownAction": "none",
   "updateRemoteUserUID": false,
+  "containerEnv": {
+    "SHELL": "/bin/zsh"
+  },
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {
       "username": "ka-jo",
