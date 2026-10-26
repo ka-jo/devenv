@@ -8,6 +8,9 @@ SHARED_FIREWALL_DIR="$REPO_DIR/devcontainer/infra/firewall"
 # written by `git worktree add --relative-paths` resolve the same as on the host.
 CONTAINER_REPO_DIR="/home/ka-jo/devenv"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/devenv"
+DEVCONTAINER_CLI="$REPO_DIR/node_modules/.bin/devcontainer"
+# The config used for any worktree whose project doesn't define its own.
+DEFAULT_CONFIG="$REPO_DIR/devcontainer/devcontainer.json"
 
 _container_ensure_volume() {
     local name="$1"
@@ -45,8 +48,8 @@ _container_resolve() {
 }
 
 # Opens VS Code attached to the running container for the worktree last
-# resolved via _container_resolve (uses CT_PN). No devcontainer.json is
-# involved — this is a plain "attached-container" URI.
+# resolved via _container_resolve (uses CT_PN). A plain "attached-container"
+# URI, not a "dev-container" one, so VS Code doesn't read the generated config.
 _open_vscode() {
     command -v code &>/dev/null || {
         echo "error: 'code' CLI not found on PATH (run 'Shell Command: Install code command in PATH' from VS Code)"
@@ -105,6 +108,59 @@ _container_compose() {
         -f "$REPO_DIR/devcontainer/docker-compose.yml" -f "$CT_STATE/override.json" "$@"
 }
 
+# Generates the devcontainer.json the CLI actually runs from: the source config
+# plus the per-worktree fields no devcontainer variable can express — the
+# mirrored workspaceFolder, and compose paths made absolute (the generated file
+# lives in CT_STATE, not beside its compose files) with override.json last.
+_container_write_config() {
+    local source="$DEFAULT_CONFIG" parsed
+    _require_devcontainer_cli
+    # read-configuration rather than jq on the raw file: configs are JSONC.
+    parsed="$("$DEVCONTAINER_CLI" read-configuration --workspace-folder "$CT_PATH" --config "$source" 2>/dev/null)" || {
+        echo "error: couldn't read $source (run: $DEVCONTAINER_CLI read-configuration --workspace-folder $CT_PATH --config $source)" >&2
+        exit 1
+    }
+    printf '%s' "$parsed" | jq \
+        --arg dir "$(dirname "$source")" --arg override "$CT_STATE/override.json" --arg wf "$CT_WORKDIR" '
+        .configuration
+        | del(.configFilePath)
+        | .dockerComposeFile = ([.dockerComposeFile | if type == "string" then [.] else . end | .[] | $dir + "/" + .] + [$override])
+        | .workspaceFolder = $wf' > "$CT_STATE/devcontainer.json"
+}
+
+_require_devcontainer_cli() {
+    [[ -x "$DEVCONTAINER_CLI" ]] || {
+        echo "error: devcontainer CLI not installed (run: devenv update)" >&2
+        exit 1
+    }
+}
+
+# Runs a devcontainer CLI subcommand against the generated config. Runs from
+# CT_STATE because the CLI reads COMPOSE_PROJECT_NAME from a .env in its cwd
+# when choosing a project name.
+#
+# BUILDX_BAKE_ENTITLEMENTS_FS=0: Buildx >= 0.37.2 refuses the CLI's generated
+# Dockerfile-with-features because it sits outside the build context, which
+# breaks every build (devcontainers/cli#1320). Remove once Compose/the CLI
+# ship the upstream fix.
+_devcontainer() {
+    local subcommand="$1"; shift
+    (cd "$CT_STATE" && COMPOSE_PROJECT_NAME="$CT_PN" BUILDX_BAKE_ENTITLEMENTS_FS=0 \
+        "$DEVCONTAINER_CLI" "$subcommand" --workspace-folder "$CT_PATH" --config "$CT_STATE/devcontainer.json" "$@")
+}
+
+# Hashes everything a container is created from: the generated config and
+# override, plus every file beside the source config (compose file, Dockerfile,
+# scripts it COPYs). Changes elsewhere in a build context aren't detected.
+_container_inputs_hash() {
+    cat "$CT_STATE/devcontainer.json" "$CT_STATE/override.json" \
+        $(find "$(dirname "$DEFAULT_CONFIG")" -maxdepth 1 -type f | sort) | sha256sum | cut -d' ' -f1
+}
+
+_container_exists() {
+    docker ps -a -q --filter "label=com.docker.compose.project=$CT_PN" | grep -q .
+}
+
 # --- shared firewall+approver stack (one instance total, not per-worktree) ---
 
 _shared_seed_firewall() {
@@ -148,9 +204,13 @@ _shared_maybe_down() {
 }
 
 cmd_container_up() {
-    local code=0 args=()
+    local code=0 rebuild=0 args=()
     for a in "$@"; do
-        if [[ "$a" == "--code" ]]; then code=1; else args+=("$a"); fi
+        case "$a" in
+            --code) code=1 ;;
+            --rebuild) rebuild=1 ;;
+            *) args+=("$a") ;;
+        esac
     done
     local repo="${args[0]:-}" branch="${args[1]:-}"
     if [[ -z "$repo" || -z "$branch" ]]; then
@@ -162,9 +222,30 @@ cmd_container_up() {
     _shared_ensure_up
     _shared_wait_healthy
     _container_write_override
+    _container_write_config
     _container_ensure_volume shared-pnpm-store
     _container_ensure_volume ka-jo-zsh-history
-    _container_compose up -d --build
+
+    # The CLI never recreates an existing container on its own, so config
+    # drift is reported rather than silently applied (recreating discards
+    # container-local state, e.g. background agent sessions).
+    local hash is_creating=1 up_args=() result
+    hash="$(_container_inputs_hash)"
+    if [[ "$rebuild" -eq 1 ]]; then
+        up_args+=(--remove-existing-container)
+    elif _container_exists; then
+        is_creating=0
+        if [[ "$(cat "$CT_STATE/created.sha256" 2>/dev/null)" != "$hash" ]]; then
+            echo "warning: config changed since this container was created; run 'devenv container up $repo $branch --rebuild' (or down/up) to apply it" >&2
+        fi
+    fi
+    result="$(_devcontainer up "${up_args[@]}")" || {
+        printf '%s\n' "$result" | jq -r '.message // .' >&2
+        exit 1
+    }
+    if [[ "$is_creating" -eq 1 ]]; then
+        printf '%s\n' "$hash" > "$CT_STATE/created.sha256"
+    fi
     echo "up: $CT_PN"
     if [[ "$code" -eq 1 ]]; then
         _open_vscode
@@ -198,10 +279,11 @@ cmd_container_attach() {
 
     _container_resolve "$repo" "$branch"
     _container_write_override
+    _container_write_config
     if [[ "$code" -eq 1 ]]; then
         _open_vscode
     else
-        _container_compose exec devcontainer zsh
+        _devcontainer exec zsh
     fi
 }
 

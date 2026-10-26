@@ -1,0 +1,9 @@
+{
+  "name": "devenv",
+  "dockerComposeFile": ["docker-compose.yml"],
+  "service": "devcontainer",
+  "remoteUser": "ka-jo",
+  "overrideCommand": false,
+  "shutdownAction": "none",
+  "updateRemoteUserUID": false
+}

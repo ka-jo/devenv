@@ -83,7 +83,7 @@ devenv clone <url> [name]                      bare-clone a repo into worktrees/
 devenv worktree add <repo> <branch> [base]     add a worktree at worktrees/<repo>/<branch>
 devenv worktree rm <repo> <branch> [--force]   remove a worktree and delete its local branch
 devenv worktree list [repo]                    list worktrees for one repo, or all repos
-devenv container up <repo> <branch>            build/start a worktree's dev container (and the shared firewall stack, if needed)
+devenv container up <repo> <branch> [--rebuild]  build/start a worktree's dev container (and the shared firewall stack, if needed)
 devenv container down <repo> <branch>          stop a worktree's dev container (and the shared firewall stack, if it was the last one)
 devenv container attach <repo> <branch>        exec a zsh shell in a running dev container
 devenv container list                          list running devenv-managed containers, including the shared stack
@@ -125,7 +125,7 @@ devenv container down my-repo feature/my-branch    # stop
 devenv container list                              # see what's running, across all worktrees
 ```
 
-`up` references `devcontainer/docker-compose.yml` directly (nothing is copied into the worktree) and regenerates a per-worktree mount override (`~/.local/state/devenv/<project>/override.json`, outside every container's mounts) each run. There's no `devcontainer.json` and VS Code doesn't own the container lifecycle here — start/stop it with the CLI, and if you want VS Code attached, use **Attach to Running Container** against `${COMPOSE_PROJECT_NAME}-devcontainer` (i.e. `<repo>-<branch>-devcontainer`) once it's up.
+`up` drives the [devcontainer CLI](https://github.com/devcontainers/cli) from the default config in `devcontainer/` (nothing is copied into the worktree), generating a per-worktree config and mount override in `~/.local/state/devenv/<project>/`, outside every container's mounts. An existing container is never recreated implicitly: if its config or image inputs changed, `up` warns, and `up --rebuild` recreates it (discarding container-local state such as background agent sessions). VS Code doesn't own the container lifecycle here — start/stop it with the CLI, and if you want VS Code attached, use **Attach to Running Container** against `${COMPOSE_PROJECT_NAME}-devcontainer` (i.e. `<repo>-<branch>-devcontainer`) once it's up.
 
 Each worktree's container:
 
