@@ -26,7 +26,8 @@ _compose_project_name() {
 
 # Sets globals: CT_REPO, CT_PATH (worktree checkout path), CT_PN (compose
 # project name), CT_WORKDIR (CT_PATH's mirrored path inside the container),
-# CT_STATE (host-only generated files, outside every container's mounts)
+# CT_STATE (host-only generated files, outside every container's mounts),
+# CT_CONFIG (the generated devcontainer.json the CLI runs from)
 _container_resolve() {
     local repo="$1" branch="$2"
     if [[ -z "$repo" || -z "$branch" ]]; then
@@ -45,6 +46,7 @@ _container_resolve() {
     CT_PN="$(_compose_project_name "$repo" "$branch")"
     CT_WORKDIR="$CONTAINER_REPO_DIR/${CT_PATH#"$REPO_DIR/"}"
     CT_STATE="$STATE_DIR/$CT_PN"
+    CT_CONFIG="$CT_STATE/.devcontainer/devcontainer.json"
 }
 
 # Opens VS Code attached to the running container for the worktree last
@@ -115,6 +117,7 @@ _container_compose() {
 _container_write_config() {
     local source="$DEFAULT_CONFIG" parsed
     _require_devcontainer_cli
+    mkdir -p "$CT_STATE/.devcontainer"
     # read-configuration rather than jq on the raw file: configs are JSONC.
     parsed="$("$DEVCONTAINER_CLI" read-configuration --workspace-folder "$CT_PATH" --config "$source" 2>/dev/null)" || {
         echo "error: couldn't read $source (run: $DEVCONTAINER_CLI read-configuration --workspace-folder $CT_PATH --config $source)" >&2
@@ -125,7 +128,15 @@ _container_write_config() {
         .configuration
         | del(.configFilePath)
         | .dockerComposeFile = ([.dockerComposeFile | if type == "string" then [.] else . end | .[] | $dir + "/" + .] + [$override])
-        | .workspaceFolder = $wf' > "$CT_STATE/devcontainer.json"
+        | .workspaceFolder = $wf' > "$CT_CONFIG"
+
+    # The CLI resolves local Features ("./features/<id>") relative to the config
+    # file and rejects any outside a directory named .devcontainer — hence
+    # CT_CONFIG's location and copying them beside it.
+    rm -rf "${CT_STATE:?}/.devcontainer/features"
+    if [[ -d "$(dirname "$source")/features" ]]; then
+        cp -r "$(dirname "$source")/features" "$CT_STATE/.devcontainer/features"
+    fi
 }
 
 _require_devcontainer_cli() {
@@ -139,6 +150,15 @@ _require_devcontainer_cli() {
 # CT_STATE because the CLI reads COMPOSE_PROJECT_NAME from a .env in its cwd
 # when choosing a project name.
 #
+# --workspace-folder is CT_STATE, not the worktree: the CLI only accepts local
+# Features under <workspace-folder>/.devcontainer/, and the worktree is
+# writable from inside the container — Feature install scripts run as root at
+# build time. In compose mode the CLI mounts nothing from the workspace folder
+# (override.json does the mounting); it only uses it to locate local Features
+# and to label the container so later calls find it again. Config variables
+# like ${localWorkspaceFolder} were already resolved against the worktree by
+# _container_write_config's read-configuration.
+#
 # BUILDX_BAKE_ENTITLEMENTS_FS=0: Buildx >= 0.37.2 refuses the CLI's generated
 # Dockerfile-with-features because it sits outside the build context, which
 # breaks every build (devcontainers/cli#1320). Remove once Compose/the CLI
@@ -146,14 +166,16 @@ _require_devcontainer_cli() {
 _devcontainer() {
     local subcommand="$1"; shift
     (cd "$CT_STATE" && COMPOSE_PROJECT_NAME="$CT_PN" BUILDX_BAKE_ENTITLEMENTS_FS=0 \
-        "$DEVCONTAINER_CLI" "$subcommand" --workspace-folder "$CT_PATH" --config "$CT_STATE/devcontainer.json" "$@")
+        "$DEVCONTAINER_CLI" "$subcommand" --workspace-folder "$CT_STATE" --config "$CT_CONFIG" "$@")
 }
 
 # Hashes everything a container is created from: the generated config and
-# override, plus every file beside the source config (compose file, Dockerfile,
-# scripts it COPYs). Changes elsewhere in a build context aren't detected.
+# override, local Features, plus every file beside the source config (compose
+# file, Dockerfile, scripts it COPYs). Changes elsewhere in a build context
+# aren't detected.
 _container_inputs_hash() {
-    cat "$CT_STATE/devcontainer.json" "$CT_STATE/override.json" \
+    cat "$CT_CONFIG" "$CT_STATE/override.json" \
+        $(find "$CT_STATE/.devcontainer/features" -type f 2>/dev/null | sort) \
         $(find "$(dirname "$DEFAULT_CONFIG")" -maxdepth 1 -type f | sort) | sha256sum | cut -d' ' -f1
 }
 

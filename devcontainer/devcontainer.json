@@ -5,5 +5,16 @@
   "remoteUser": "ka-jo",
   "overrideCommand": false,
   "shutdownAction": "none",
-  "updateRemoteUserUID": false
+  "updateRemoteUserUID": false,
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "username": "ka-jo",
+      "userUid": "1000",
+      "userGid": "1000",
+      "configureZshAsDefaultShell": true,
+      "ohMyZshTheme": "robbyrussell",
+      "upgradePackages": false
+    },
+    "./features/fnm": {}
+  }
 }

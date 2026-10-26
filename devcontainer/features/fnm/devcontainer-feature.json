@@ -1,0 +1,21 @@
+{
+  "id": "fnm",
+  "version": "1.0.0",
+  "name": "fnm + standalone pnpm",
+  "description": "Installs fnm (with per-shell Node switching on cd) and the standalone pnpm build, both pinned and checksum-verified.",
+  "options": {
+    "nodeVersion": {
+      "type": "string",
+      "default": "lts",
+      "description": "Node version installed as fnm's default ('lts' or an fnm version spec)."
+    }
+  },
+  "containerEnv": {
+    "FNM_DIR": "/usr/local/share/fnm",
+    "PNPM_HOME": "/usr/local/share/pnpm",
+    "PATH": "/usr/local/share/fnm/aliases/default/bin:/usr/local/share/pnpm:${PATH}"
+  },
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/common-utils"
+  ]
+}

@@ -17,7 +17,9 @@ claude/                       # global Claude Code config — symlinked into ~/.
   output-styles/              #   custom output styles
 devcontainer/                 # dev container base — referenced directly by `devenv container`, never copied
   docker-compose.yml          #   the app service only, joins the shared proxy_net (below) as its sole network
-  Dockerfile                  #   Debian Trixie base: zsh + oh-my-zsh, fnm, pnpm, Claude Code
+  devcontainer.json           #   default config: Features (common-utils, ./features/fnm) on top of the Dockerfile
+  Dockerfile                  #   Ubuntu 26.04 base + ka-jo user + Claude Code
+  features/fnm/               #   local Feature: pinned, checksum-verified fnm + standalone pnpm
   infra/                      #   Squid firewall + egress approver — ONE shared instance for all worktrees
     docker-compose.yml        #     approver + firewall services (see lib/container.sh _shared_*)
     approver/                 #     Bun/TypeScript egress approval broker (see approver/PROTOCOL.md)
@@ -132,7 +134,7 @@ Each worktree's container:
 - Mounts the worktree at its **mirrored path** (`/home/ka-jo/devenv/worktrees/<repo>/<branch>`, not `/workspace`), alongside its repo's bare `.git`, so the relative gitdir links from `git worktree add --relative-paths` resolve and git works inside the container. The bare repo's `config`, `hooks/`, `worktrees/` admin dirs (except this worktree's own), its `commondir`, and the worktree's `.git` file are pinned read-only so a sandboxed process can't plant hooks/`core.fsmonitor` that would run on the host. Known gap: submodule git dirs (`<bare>/modules/`) stay writable.
 - Sees `~/devenv` **read-only**, with `worktrees/` replaced by a tmpfs: other repos are visible only as their bare `.git` (committed history, read-only) — never their checkouts, uncommitted work, or gitignored files like `.env`.
 - Joins a **shared** `internal: true` Docker network (`devenv-shared_proxy_net`) — **no direct external access**. The only egress path is the shared Squid firewall, reached via `HTTP(S)_PROXY` env vars (and `NODE_USE_ENV_PROXY=1` so Node's http/https honor them).
-- Builds on **Debian Trixie** with `zsh` + oh-my-zsh, **`fnm`** (Node version manager), `pnpm`, and Claude Code preinstalled. Runs as the non-root user **`ka-jo`** with passwordless sudo.
+- Builds on **Ubuntu 26.04** with `zsh` + oh-my-zsh, **`fnm`** (Node version manager, per-shell switching on `cd`), standalone `pnpm` (which switches to a project's `packageManager` version on its own), and Claude Code preinstalled. The worktree's `.node-version`/`.nvmrc` becomes the container-wide default Node at start. Runs as the non-root user **`ka-jo`** with passwordless sudo.
 - Bind-mounts your host's `~/.claude` and `~/devenv` into the container, so Claude config and skills are shared live and edits made in either place are visible in both. Symlinks `devenv` onto `PATH` inside the container too.
 - Shares a `pnpm` store across all dev containers via the external `shared-pnpm-store` Docker volume, so package downloads are cached once per host. Shell history persists in a named `ka-jo-zsh-history` volume.
 
