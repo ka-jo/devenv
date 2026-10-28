@@ -5,8 +5,6 @@
 # does not enforce name uniqueness, so name -> id resolution may need an
 # fzf picker when more than one background agent shares a name).
 
-CLAUDE_WRAPPER="/home/ka-jo/devenv/bin/claude-wrapper"
-
 _require_jq() {
     command -v jq &>/dev/null || {
         echo "error: jq is required (used to parse 'claude agents --json' output)"
@@ -28,13 +26,24 @@ _agent_resolve_running() {
         echo "error: no running container for $repo/$branch (run: devenv agent up $repo $branch)"
         exit 1
     fi
-    _container_write_override
+}
+
+# Runs claude (via claude-wrapper, for its per-session proxy credentials) in
+# the worktree container last resolved. Pass --tty first for interactive use.
+#
+# The wrapper path is built here rather than in a top-level variable:
+# bin/devenv sources lib/*.sh alphabetically, so CONTAINER_REPO_DIR
+# (lib/container.sh) isn't set yet when this file's top level runs.
+_agent_claude() {
+    local tty=()
+    [[ "${1:-}" == --tty ]] && { tty=(--tty); shift; }
+    _container_exec "${tty[@]}" "$CONTAINER_REPO_DIR/bin/claude-wrapper" "$@"
 }
 
 # Prints `claude agents --json --all --cwd <workdir>` for the worktree
 # container last resolved via _agent_resolve_running/_container_resolve.
 _agent_list_json() {
-    _container_compose exec -T devcontainer "$CLAUDE_WRAPPER" agents --json --all --cwd "$CT_WORKDIR"
+    _agent_claude agents --json --all --cwd "$CT_WORKDIR"
 }
 
 # Resolves a devenv agent `name` (optional) to a claude session id, scoped to
@@ -98,14 +107,9 @@ cmd_agent_up() {
     fi
 
     _container_resolve "$repo" "$branch"
-    _shared_ensure_up
-    _shared_wait_healthy
-    _container_write_override
-    _container_ensure_volume shared-pnpm-store
-    _container_ensure_volume ka-jo-zsh-history
-    _container_compose up -d --build
+    _container_up
 
-    _container_compose exec devcontainer "$CLAUDE_WRAPPER" --bg -n "$name" "${args[@]}"
+    _agent_claude --tty --bg -n "$name" "${args[@]}"
     echo "agent up: $CT_PN (name: $name)"
 }
 
@@ -122,14 +126,14 @@ cmd_agent_attach() {
         _agent_pick "$name"
     fi
     echo "attaching: $CT_PN (agent: $AGENT_NAME, id: $AGENT_ID)"
-    _container_compose exec devcontainer "$CLAUDE_WRAPPER" attach "$AGENT_ID"
+    _agent_claude --tty attach "$AGENT_ID"
 }
 
 cmd_agent_rm() {
     local repo="${1:-}" branch="${2:-}" name="${3:-}"
     _agent_resolve_running "$repo" "$branch"
     _agent_pick "$name"
-    _container_compose exec devcontainer "$CLAUDE_WRAPPER" rm "$AGENT_ID"
+    _agent_claude rm "$AGENT_ID"
     echo "removed: $AGENT_NAME ($AGENT_ID) from $CT_PN"
 }
 
@@ -155,7 +159,6 @@ cmd_agent_list() {
         for t in "${targets[@]}"; do
             r="${t%%$'\t'*}"; b="${t#*$'\t'}"
             _container_resolve "$r" "$b"
-            _container_write_override
             _agent_list_json | jq -r --arg repo "$r" --arg branch "$b" \
                 '.[] | select(.kind=="background") | [$repo, $branch, .name, .id, .status, (.startedAt/1000 | gmtime | strftime("%Y-%m-%dT%H:%M:%SZ"))] | @tsv'
         done

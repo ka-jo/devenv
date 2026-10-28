@@ -3,10 +3,17 @@ SHARED_PROXY_NET="devenv-shared_proxy_net"
 # Lives inside ~/devenv, which app containers mount read-only — only the
 # approver (never an app container) writes it.
 SHARED_FIREWALL_DIR="$REPO_DIR/devcontainer/infra/firewall"
-# Where ~/devenv is mounted inside every app container. Worktrees are mounted at
-# their mirrored path under it (not /workspace) so the relative gitdir links
-# written by `git worktree add --relative-paths` resolve the same as on the host.
-CONTAINER_REPO_DIR="/home/ka-jo/devenv"
+# Where ~/devenv and ~/.claude are mounted inside every app container: fixed
+# paths, the same whatever user an image runs as. They're siblings (as on the
+# host) so the relative ~/.claude -> ../devenv/claude/... links resolve, and
+# Claude finds its config via CLAUDE_CONFIG_DIR rather than the user's home.
+# Worktrees are mounted at their mirrored path under the repo (not /workspace)
+# so the relative gitdir links written by `git worktree add --relative-paths`
+# resolve the same as on the host.
+CONTAINER_REPO_DIR="/devenv"
+CONTAINER_CLAUDE_DIR="/.claude"
+# Also hardcoded in devcontainer/features/agent/install.sh and the dashboard
+# (CONTAINER_REPO_DIR in dashboard/src/state/sources/agents.ts).
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/devenv"
 DEVCONTAINER_CLI="$REPO_DIR/node_modules/.bin/devcontainer"
 # The config used for any worktree whose project doesn't define its own.
@@ -27,7 +34,7 @@ _compose_project_name() {
     printf '%s-%s' "$1" "$(printf '%s' "$2" | tr '[:upper:]/' '[:lower:]-' | tr -cs 'a-z0-9-' '-')"
 }
 
-# Sets globals: CT_REPO, CT_PATH (worktree checkout path), CT_PN (compose
+# Sets globals: CT_REPO, CT_BRANCH, CT_PATH (worktree checkout path), CT_PN (compose
 # project name), CT_WORKDIR (CT_PATH's mirrored path inside the container),
 # CT_STATE (host-only generated files, outside every container's mounts),
 # CT_CONFIG (the generated devcontainer.json the CLI runs from)
@@ -46,6 +53,7 @@ _container_resolve() {
     fi
 
     CT_REPO="$repo"
+    CT_BRANCH="$branch"
     CT_PN="$(_compose_project_name "$repo" "$branch")"
     CT_WORKDIR="$CONTAINER_REPO_DIR/${CT_PATH#"$REPO_DIR/"}"
     CT_STATE="$STATE_DIR/$CT_PN"
@@ -66,17 +74,37 @@ _open_vscode() {
     code --folder-uri "vscode-remote://attached-container+${hex}${CT_WORKDIR}"
 }
 
-# Generates the per-worktree compose override: this worktree and its bare repo
-# read-write at their mirrored paths, every other repo's bare .git read-only,
-# and read-only pins over everything git takes config/hooks from. Without
-# those pins a sandboxed process could plant core.hooksPath/core.fsmonitor (or
-# repoint a worktree's .git file or commondir at a config it controls) and get
-# code execution on the host the next time git runs there.
+# Generates the per-worktree compose override — the agent layer every devenv
+# container gets on top of its config's own service (CT_CONFIG's `service`,
+# so _container_write_config runs first):
+#
+# - Network: proxy_net ONLY, so the container's sole reach is Squid — no route
+#   to the approver (decision authority) or the internet except through it.
+#   proxy_net is owned by the shared stack and referenced by fixed name; compose
+#   can't depends_on across projects, hence _shared_ensure_up/_shared_wait_healthy.
+# - Claude config: only the specific host ~/.claude entries the container needs
+#   (config + auth), not the whole directory. The rest — jobs/, projects/,
+#   sessions/, history.jsonl — is the background-agent session registry, and
+#   sharing it made every container list every other container's agents. Each
+#   container keeps its own copy in its filesystem layer instead.
+#   ~/.claude.json (preferences settings.json doesn't cover, plus UI state) is
+#   shared read-write with the host and every container — not a per-session
+#   registry, but concurrent writers can still clobber each other's updates.
+# - ~/devenv read-only, so the firewall allowlist and the compose/config files
+#   are out of a sandboxed process's reach, with worktrees/ masked by a
+#   read-only tmpfs: other repos' checkouts (uncommitted work, gitignored
+#   secrets like .env) stay hidden, and only the binds layered on top show.
+# - This worktree and its bare repo read-write at their mirrored paths, every
+#   other repo's bare .git read-only (committed history, for research), and
+#   read-only pins over everything git takes config/hooks from. Without those
+#   pins a sandboxed process could plant core.hooksPath/core.fsmonitor (or
+#   repoint a worktree's .git file or commondir at a config it controls) and
+#   get code execution on the host the next time git runs there.
 #
 # Known gap: submodule git dirs (<bare>/modules/) stay writable, so the same
 # applies to host-side submodule commands in repos that use submodules.
 _container_write_override() {
-    local bare="$WORKTREES_DIR/$CT_REPO/.git" gitdir admin other others=()
+    local bare="$WORKTREES_DIR/$CT_REPO/.git" gitdir admin other others=() service
     gitdir="$(sed -n 's/^gitdir: //p' "$CT_PATH/.git")"
     if [[ "$gitdir" == /* ]]; then
         echo "error: $CT_PATH has an absolute gitdir link, which can't resolve inside the container" >&2
@@ -87,30 +115,66 @@ _container_write_override() {
     for other in "$WORKTREES_DIR"/*/.git; do
         [[ -d "$other" && "$other" != "$bare" ]] && others+=("$other")
     done
+    service="$(jq -r '.service' "$CT_CONFIG")"
     mkdir -p "$CT_STATE" "$bare/hooks"
 
     jq -n \
-        --arg host "$REPO_DIR" --arg ct "$CONTAINER_REPO_DIR" \
+        --arg host "$REPO_DIR" --arg ct "$CONTAINER_REPO_DIR" --arg claude "$CONTAINER_CLAUDE_DIR" \
+        --arg home "$HOME" --arg pn "$CT_PN" --arg service "$service" --arg proxynet "$SHARED_PROXY_NET" \
+        --arg settings "$REPO_DIR/devcontainer/managed-settings.json" \
         --arg wt "$CT_PATH" --arg bare "$bare" --arg admin "$admin" '
-        def bind($ro): {type: "bind", source: ., target: ($ct + ltrimstr($host)), read_only: $ro};
-        {services: {devcontainer: {
-            working_dir: ($ct + ($wt | ltrimstr($host))),
-            volumes: ([
-                ($wt | bind(false)),
-                ($wt + "/.git" | bind(true)),
-                ($bare | bind(false)),
-                ($bare + "/config" | bind(true)),
-                ($bare + "/hooks" | bind(true)),
-                ($bare + "/worktrees" | bind(true)),
-                ($admin | bind(false)),
-                ($admin + "/commondir" | bind(true))
-            ] + [$ARGS.positional[] | bind(true)])
-        }}}' --args "${others[@]}" > "$CT_STATE/override.json"
+        def mount($target; $ro): {type: "bind", source: ., target: $target, read_only: $ro};
+        def bind($ro): mount($ct + ltrimstr($host); $ro);
+        def claude($entry): ($home + "/.claude/" + $entry) | mount($claude + "/" + $entry; false);
+        {
+            name: $pn,
+            services: {($service): {
+                container_name: ($pn + "-devcontainer"),
+                working_dir: ($ct + ($wt | ltrimstr($host))),
+                networks: ["proxy_net"],
+                environment: {
+                    HTTP_PROXY: "http://firewall:3128",
+                    HTTPS_PROXY: "http://firewall:3128",
+                    http_proxy: "http://firewall:3128",
+                    https_proxy: "http://firewall:3128",
+                    NO_PROXY: "localhost,127.0.0.1",
+                    no_proxy: "localhost,127.0.0.1",
+                    # Node 22+ built-in http/https only honor the proxy vars with this.
+                    NODE_USE_ENV_PROXY: "1",
+                    CLAUDE_CONFIG_DIR: $claude
+                },
+                volumes: ([
+                    ($host | mount($ct; true)),
+                    {type: "tmpfs", target: ($ct + "/worktrees"), read_only: true},
+                    claude("CLAUDE.md"), claude("rules"), claude("skills"), claude("agents"),
+                    claude("commands"), claude("output-styles"),
+                    claude(".credentials.json"), claude("settings.json"),
+                    ($home + "/.claude.json" | mount($claude + "/.claude.json"; false)),
+                    ($settings | mount("/etc/claude-code/managed-settings.json"; true)),
+                    ($wt | bind(false)),
+                    ($wt + "/.git" | bind(true)),
+                    ($bare | bind(false)),
+                    ($bare + "/config" | bind(true)),
+                    ($bare + "/hooks" | bind(true)),
+                    ($bare + "/worktrees" | bind(true)),
+                    ($admin | bind(false)),
+                    ($admin + "/commondir" | bind(true))
+                ] + [$ARGS.positional[] | bind(true)])
+            }},
+            networks: {proxy_net: {external: true, name: $proxynet}}
+        }' --args "${others[@]}" > "$CT_STATE/override.json"
 }
 
-_container_compose() {
-    COMPOSE_PROJECT_NAME="$CT_PN" docker compose -p "$CT_PN" \
-        -f "$REPO_DIR/devcontainer/docker-compose.yml" -f "$CT_STATE/override.json" "$@"
+# Runs a command in the resolved worktree's container as its remote user, in
+# the worktree. --tty allocates a terminal when stdin is one.
+_container_exec() {
+    local tty=() user=()
+    if [[ "${1:-}" == --tty ]]; then
+        shift
+        [[ -t 0 ]] && tty=(-it)
+    fi
+    [[ -e "$CT_STATE/meta.json" ]] && user=(-u "$(jq -r '.user' "$CT_STATE/meta.json")")
+    docker exec "${tty[@]}" "${user[@]}" -w "$CT_WORKDIR" "$CT_PN-devcontainer" "$@"
 }
 
 # Generates the devcontainer.json the CLI actually runs from: the source config
@@ -129,12 +193,12 @@ _container_write_config() {
     }
     printf '%s' "$parsed" | jq \
         --arg dir "$(dirname "$source")" --arg override "$CT_STATE/override.json" \
-        --arg wf "$CT_WORKDIR" --arg devenv "$CONTAINER_REPO_DIR" '
+        --arg wf "$CT_WORKDIR" '
         .configuration
         | del(.configFilePath)
         | .dockerComposeFile = ([.dockerComposeFile | if type == "string" then [.] else . end | .[] | $dir + "/" + .] + [$override])
         | .workspaceFolder = $wf
-        | .features["./features/agent"] = {devenvDir: $devenv}' > "$CT_CONFIG"
+        | .features["./features/agent"] = {}' > "$CT_CONFIG"
 
     # The CLI resolves local Features ("./features/<id>") relative to the config
     # file, and only accepts them under <workspace-folder>/.devcontainer/ (see
@@ -245,10 +309,21 @@ cmd_container_up() {
     fi
 
     _container_resolve "$repo" "$branch"
+    _container_up "$rebuild"
+    echo "up: $CT_PN"
+    if [[ "$code" -eq 1 ]]; then
+        _open_vscode
+    fi
+}
+
+# Creates or starts the resolved worktree's container (and the shared stack
+# first). Shared by `container up` and `agent up`. Pass 1 to recreate it.
+_container_up() {
+    local rebuild="${1:-0}"
     _shared_ensure_up
     _shared_wait_healthy
-    _container_write_override
     _container_write_config
+    _container_write_override
     _container_ensure_volume shared-pnpm-store
     _container_ensure_volume ka-jo-zsh-history
 
@@ -262,7 +337,7 @@ cmd_container_up() {
     elif _container_exists; then
         is_creating=0
         if [[ "$(cat "$CT_STATE/created.sha256" 2>/dev/null)" != "$hash" ]]; then
-            echo "warning: config changed since this container was created; run 'devenv container up $repo $branch --rebuild' (or down/up) to apply it" >&2
+            echo "warning: config changed since this container was created; run 'devenv container up $CT_REPO $CT_BRANCH --rebuild' (or down/up) to apply it" >&2
         fi
     fi
     result="$(_devcontainer up "${up_args[@]}")" || {
@@ -272,10 +347,10 @@ cmd_container_up() {
     if [[ "$is_creating" -eq 1 ]]; then
         printf '%s\n' "$hash" > "$CT_STATE/created.sha256"
     fi
-    echo "up: $CT_PN"
-    if [[ "$code" -eq 1 ]]; then
-        _open_vscode
-    fi
+    # What exec consumers (_container_exec, the dashboard) need to reach the
+    # container without the compose files: who to run as.
+    printf '%s' "$result" | jq --arg container "$CT_PN-devcontainer" \
+        '{container: $container, user: .remoteUser, workdir: .remoteWorkspaceFolder}' > "$CT_STATE/meta.json"
 }
 
 cmd_container_down() {
@@ -286,8 +361,8 @@ cmd_container_down() {
     fi
 
     _container_resolve "$repo" "$branch"
-    _container_write_override
-    _container_compose down
+    # By project name alone: compose finds the stack's containers by label.
+    docker compose -p "$CT_PN" down
     _shared_maybe_down
     echo "down: $CT_PN"
 }
@@ -304,8 +379,8 @@ cmd_container_attach() {
     fi
 
     _container_resolve "$repo" "$branch"
-    _container_write_override
     _container_write_config
+    _container_write_override
     if [[ "$code" -eq 1 ]]; then
         _open_vscode
     else

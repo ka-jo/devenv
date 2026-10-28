@@ -1,84 +1,21 @@
+# The default image's own service definition only. Everything that makes it a
+# devenv agent container — proxy_net, proxy env, the Claude config and ~/devenv
+# mounts, the worktree and git pins, container_name — is generated per worktree
+# into override.json by _container_write_override (lib/container.sh), so it
+# applies the same way to any config.
 services:
   devcontainer:
-    container_name: ${COMPOSE_PROJECT_NAME}-devcontainer
     build:
       dockerfile: Dockerfile
     command: sleep infinity
-    # The worktree itself, its bare repo, and the git hardening mounts are
-    # per-repo, so they're generated into an override file by
-    # _container_write_override (lib/container.sh), not declared here. That
-    # override also sets working_dir.
     volumes:
-      # Mount only the specific host ~/.claude entries the container needs, not the
-      # whole directory: config (real host directories of per-child symlinks into
-      # ../devenv/claude/..., which resolve via the ~/devenv mount below, so edits still
-      # propagate live) plus auth, so every container stays logged in without its own
-      # `claude login` (assumes both files already exist on the host — run `claude
-      # login` there first if they don't). Everything else under ~/.claude —
-      # jobs/, projects/, sessions/, history.jsonl, cache/ — is deliberately NOT
-      # mounted: those are the supervisor's background-agent session registry, and
-      # sharing them verbatim across every worktree's container made every container
-      # see every other container's agents (they all report cwd=/workspace, so nothing
-      # in that shared registry could tell them apart). Each container now gets its
-      # own private copy, created fresh by Claude Code inside its own filesystem layer.
-      - ${HOME}/.claude/CLAUDE.md:/home/ka-jo/.claude/CLAUDE.md
-      - ${HOME}/.claude/rules:/home/ka-jo/.claude/rules
-      - ${HOME}/.claude/skills:/home/ka-jo/.claude/skills
-      - ${HOME}/.claude/agents:/home/ka-jo/.claude/agents
-      - ${HOME}/.claude/commands:/home/ka-jo/.claude/commands
-      - ${HOME}/.claude/output-styles:/home/ka-jo/.claude/output-styles
-      - ${HOME}/.claude/.credentials.json:/home/ka-jo/.claude/.credentials.json
-      - ${HOME}/.claude/settings.json:/home/ka-jo/.claude/settings.json
-      # ~/.claude.json (note: sibling to ~/.claude/, not inside it) is a separate legacy
-      # state file holding preferences the settings.json schema doesn't cover — e.g.
-      # leftArrowOpensAgents — plus misc UI/cache state (tipsHistory, cachedGrowthBook-
-      # Features, hasOpenedAgentsView). Shared read-write like the old blanket mount, so
-      # every container and the host all write the same file; unlike jobs/projects/
-      # sessions above, this file isn't a per-session registry keyed on a now-ambiguous
-      # cwd, so cross-container sharing doesn't reintroduce that specific bug — but
-      # concurrent writers can still race/clobber each other's updates to it.
-      - ${HOME}/.claude.json:/home/ka-jo/.claude.json
-      # Read-only: the container only needs to resolve the ~/.claude symlinks
-      # and run bin/ from here. Keeping it read-only also keeps the firewall
-      # allowlist (devcontainer/infra/firewall/) and this compose file out of a
-      # sandboxed process's reach.
-      - ${HOME}/devenv:/home/ka-jo/devenv:ro
-      # Hide every repo's checkouts (uncommitted work, gitignored secrets like
-      # .env). The override re-exposes only this worktree, plus every repo's
-      # bare .git read-only (committed history, for cross-project research).
-      # Read-only because it exists only to mask: writable, it would be an
-      # uncapped, RAM-backed scratch dir (sudo bypasses the root-owned
-      # mountpoint dirs) whose contents vanish on `down`. The binds layered on
-      # top keep their own modes.
-      - type: tmpfs
-        target: /home/ka-jo/devenv/worktrees
-        read_only: true
-      - ./managed-settings.json:/etc/claude-code/managed-settings.json:ro
       - pnpm-store:/home/ka-jo/.pnpm-store
       - zsh-history:/home/ka-jo/commandhistory
     environment:
       HISTFILE: /home/ka-jo/commandhistory/.zsh_history
-      HTTP_PROXY: http://firewall:3128
-      HTTPS_PROXY: http://firewall:3128
-      http_proxy: http://firewall:3128
-      https_proxy: http://firewall:3128
-      NO_PROXY: localhost,127.0.0.1
-      no_proxy: localhost,127.0.0.1
-      # Make Node's built-in http/https modules respect proxy env vars (Node 22+).
-      # (see: https://nodejs.org/learn/http/enterprise-network-configuration)
-      NODE_USE_ENV_PROXY: "1"
       # Pin the pnpm store to the shared volume mount point regardless of
       # which user the container process runs as. (see: https://github.com/orgs/pnpm/discussions/9460)
       pnpm_config_store_dir: /home/ka-jo/.pnpm-store
-    # On proxy_net ONLY: the app container's sole network reach is Squid. It has no
-    # route to the approver (decision authority) or the internet except through it.
-    # proxy_net is owned by the shared stack (devcontainer/infra/docker-compose.yml,
-    # compose project `devenv-shared`) and referenced here by fixed name — see
-    # lib/container.sh's _shared_ensure_up/_shared_wait_healthy, which bring the
-    # shared stack up and healthy before this service starts (compose can't
-    # depends_on a service in a different project).
-    networks:
-      - proxy_net
 
 volumes:
   pnpm-store:
@@ -87,8 +24,3 @@ volumes:
   zsh-history:
     external: true
     name: ka-jo-zsh-history
-
-networks:
-  proxy_net:
-    external: true
-    name: devenv-shared_proxy_net

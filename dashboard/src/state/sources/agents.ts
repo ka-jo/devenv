@@ -1,11 +1,12 @@
+import os from "node:os";
 import path from "node:path";
 import { REPO_DIR } from "../../lib/paths.ts";
 
-/** Absolute path to the shared devcontainer compose file every worktree's container is defined by. */
-const COMPOSE_FILE = path.join(REPO_DIR, "devcontainer/docker-compose.yml");
-
 /** Where {@link REPO_DIR} is mounted inside every worktree's container. */
-const CONTAINER_REPO_DIR = "/home/ka-jo/devenv";
+const CONTAINER_REPO_DIR = "/devenv";
+
+/** Host-only per-worktree state written by `devenv container up` (STATE_DIR in lib/container.sh). */
+const STATE_DIR = path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local/state"), "devenv");
 
 /** Lifecycle state of one Claude Code background agent session, per `claude agents --json`. */
 export type AgentState = "working" | "blocked" | "done" | "failed" | "stopped";
@@ -46,34 +47,26 @@ export async function listBackgroundAgents(
   projectName: string,
   worktreePath: string,
 ): Promise<AgentInfo[]> {
+  // Mirrors CT_WORKDIR (lib/container.sh): worktrees are mounted at their
+  // ~/devenv-relative path under CONTAINER_REPO_DIR, not /workspace.
+  const workdir = path.posix.join(CONTAINER_REPO_DIR, path.relative(REPO_DIR, worktreePath));
+  const user = await readContainerUser(projectName);
   const proc = Bun.spawn(
     [
       "docker",
-      "compose",
-      "-p",
-      projectName,
-      "-f",
-      COMPOSE_FILE,
       "exec",
-      "-T",
-      "devcontainer",
+      ...(user === undefined ? [] : ["-u", user]),
+      "-w",
+      workdir,
+      `${projectName}-devcontainer`,
       "claude",
       "agents",
       "--json",
       "--all",
       "--cwd",
-      // Mirrors CT_WORKDIR (lib/container.sh): worktrees are mounted at their
-      // ~/devenv-relative path under the container user's home, not /workspace.
-      path.posix.join(CONTAINER_REPO_DIR, path.relative(REPO_DIR, worktreePath)),
+      workdir,
     ],
-    {
-      env: {
-        ...process.env,
-        COMPOSE_PROJECT_NAME: projectName,
-      },
-      stdout: "pipe",
-      stderr: "ignore",
-    },
+    { stdout: "pipe", stderr: "ignore" },
   );
   const output = await new Response(proc.stdout).text();
   const exitCode = await proc.exited;
@@ -93,6 +86,22 @@ export async function listBackgroundAgents(
   } catch {
     return [];
   }
+}
+
+/**
+ * Reads the user `devenv container up` recorded for a worktree's container in its meta.json, or `undefined` if none was
+ * recorded yet — `docker exec` then falls back to the image's default user.
+ */
+async function readContainerUser(projectName: string): Promise<string | undefined> {
+  try {
+    const meta: unknown = await Bun.file(path.join(STATE_DIR, projectName, "meta.json")).json();
+    if (typeof meta === "object" && meta !== null && "user" in meta && typeof meta.user === "string") {
+      return meta.user;
+    }
+  } catch {
+    // Missing or malformed meta.json gets the same fallback as no recorded user.
+  }
+  return undefined;
 }
 
 /** Converts one raw `claude agents --json` background entry into an {@link AgentInfo}, or `undefined` if required fields are missing/malformed. */

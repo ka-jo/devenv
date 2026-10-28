@@ -74,7 +74,7 @@ Runtime state Claude Code writes into `~/.claude/` itself — `sessions/`, `proj
 
 ### Why `~/devenv` is required
 
-The dev container template bind-mounts your host's `~/.claude` and `~/devenv` into the container at fixed sibling paths (`/home/ka-jo/.claude` and `/home/ka-jo/devenv` — the container runs as the non-root user `ka-jo`). The `~/.claude/*` symlinks are **relative** (`../devenv/claude/...`), so they resolve correctly in either context — on the host or inside the container — **as long as `~/devenv` is the actual repo path** (or a symlink Docker can resolve to it).
+Every dev container bind-mounts your host's `~/devenv` at `/devenv` and the needed `~/.claude` entries under `/.claude` — fixed sibling paths that don't depend on which user the image runs as (Claude finds its config via `CLAUDE_CONFIG_DIR=/.claude`). The `~/.claude/*` symlinks are **relative** (`../devenv/claude/...`), so they resolve correctly in either context — on the host or inside the container — **as long as `~/devenv` is the actual repo path** (or a symlink Docker can resolve to it).
 
 Hard-requiring `~/devenv` keeps `install.sh` simple (no auto-healing symlink layer) and means edits to Claude files inside the dev container flow live back to the host repo, where you can commit and push them.
 
@@ -132,7 +132,7 @@ devenv container list                              # see what's running, across 
 
 Each worktree's container:
 
-- Mounts the worktree at its **mirrored path** (`/home/ka-jo/devenv/worktrees/<repo>/<branch>`, not `/workspace`), alongside its repo's bare `.git`, so the relative gitdir links from `git worktree add --relative-paths` resolve and git works inside the container. The bare repo's `config`, `hooks/`, `worktrees/` admin dirs (except this worktree's own), its `commondir`, and the worktree's `.git` file are pinned read-only so a sandboxed process can't plant hooks/`core.fsmonitor` that would run on the host. Known gap: submodule git dirs (`<bare>/modules/`) stay writable.
+- Mounts the worktree at its **mirrored path** (`/devenv/worktrees/<repo>/<branch>`, not `/workspace`), alongside its repo's bare `.git`, so the relative gitdir links from `git worktree add --relative-paths` resolve and git works inside the container. The bare repo's `config`, `hooks/`, `worktrees/` admin dirs (except this worktree's own), its `commondir`, and the worktree's `.git` file are pinned read-only so a sandboxed process can't plant hooks/`core.fsmonitor` that would run on the host. Known gap: submodule git dirs (`<bare>/modules/`) stay writable.
 - Sees `~/devenv` **read-only**, with `worktrees/` replaced by a tmpfs: other repos are visible only as their bare `.git` (committed history, read-only) — never their checkouts, uncommitted work, or gitignored files like `.env`.
 - Joins a **shared** `internal: true` Docker network (`devenv-shared_proxy_net`) — **no direct external access**. The only egress path is the shared Squid firewall, reached via `HTTP(S)_PROXY` env vars (and `NODE_USE_ENV_PROXY=1` so Node's http/https honor them).
 - Builds on **Ubuntu 26.04** with `zsh` + oh-my-zsh, **`fnm`** (Node version manager, per-shell switching on `cd`), standalone `pnpm` (which switches to a project's `packageManager` version on its own), and Claude Code preinstalled. The worktree's `.node-version`/`.nvmrc` becomes the container-wide default Node at start. Runs as the non-root user **`ka-jo`** with passwordless sudo.
