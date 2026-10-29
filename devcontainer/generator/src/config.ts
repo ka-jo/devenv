@@ -124,6 +124,9 @@ export function deriveGeneratedConfig(source: DevcontainerConfig, inputs: Genera
   if (initializeCommand !== undefined && !inputs.isDefault) {
     notices.push("initializeCommand removed (it would run on the host)");
   }
+  if (!inputs.isDefault && typeof source.workspaceFolder === "string" && source.workspaceFolder !== inputs.workspaceFolder) {
+    notices.push(`workspaceFolder changed from ${source.workspaceFolder} to ${inputs.workspaceFolder}`);
+  }
   const features = typeof source.features === "object" && source.features !== null ? source.features : {};
 
   return {

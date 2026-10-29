@@ -33,6 +33,15 @@ describe("deriveGeneratedConfig", () => {
     expect(config.features).toEqual({ "./features/fnm": {}, "./.devenv-features/agent": {} });
   });
 
+  test("says when a project's workspaceFolder is replaced, but not for the default config", () => {
+    const source = { service: "app", dockerComposeFile: "compose.yml", workspaceFolder: "/workspaces/x" };
+    expect(deriveGeneratedConfig(source, inputs).notices).toEqual([
+      "workspaceFolder changed from /workspaces/x to /devenv/worktrees/r/main",
+    ]);
+    expect(deriveGeneratedConfig(source, { ...inputs, isDefault: true }).notices).toEqual([]);
+    expect(deriveGeneratedConfig({ ...source, workspaceFolder: inputs.workspaceFolder }, inputs).notices).toEqual([]);
+  });
+
   test("strips a project's initializeCommand, which would run on the host, and says so", () => {
     const { config, notices } = deriveGeneratedConfig(
       { service: "app", dockerComposeFile: "compose.yml", initializeCommand: "touch /tmp/x" },
