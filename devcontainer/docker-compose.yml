@@ -1,13 +1,17 @@
 # The default image's own service definition only. Everything that makes it a
 # devenv agent container — proxy_net, proxy env, the Claude config and ~/devenv
 # mounts, the worktree and git pins, container_name — is generated per worktree
-# into override.json by _container_write_override (lib/container.sh), so it
-# applies the same way to any config.
+# into override.yaml by devcontainer/generator (src/override.ts), so it applies
+# the same way to any config.
 services:
   devcontainer:
     build:
       dockerfile: Dockerfile
     command: sleep infinity
+    # As PID 1, sleep ignores SIGTERM, so every stop would wait out Docker's 10s
+    # timeout; an init process forwards the signal (and reaps agents' orphaned
+    # child processes).
+    init: true
     volumes:
       - pnpm-store:/home/ka-jo/.pnpm-store
       - zsh-history:/home/ka-jo/commandhistory
