@@ -220,9 +220,21 @@ _shared_compose() {
         docker compose -p "$SHARED_PN" -f "$REPO_DIR/devcontainer/infra/docker-compose.yml" "$@"
 }
 
+# Only (re)builds the stack when it isn't already up: `compose up` on a running
+# stack recreates it for any change it detects (an edit to the firewall or
+# approver source, say), cutting off every other worktree's agents. Such
+# changes apply the next time the stack starts, after the last worktree is down.
 _shared_ensure_up() {
     _shared_seed_firewall
+    _shared_is_healthy && return 0
     _shared_compose up -d --build
+}
+
+_shared_is_healthy() {
+    local service
+    for service in firewall approver; do
+        [[ "$(docker inspect -f '{{.State.Health.Status}}' "${SHARED_PN}-$service" 2>/dev/null)" == "healthy" ]] || return 1
+    done
 }
 
 _shared_wait_healthy() {
