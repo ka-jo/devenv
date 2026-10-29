@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, type Hash } from "node:crypto";
+import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DEVENV_FEATURES_SUBDIR, localFeaturePaths } from "./config.ts";
 import type { GeneratorContext } from "./context.ts";
@@ -51,11 +51,13 @@ export async function generateWorktreeConfig(context: GeneratorContext): Promise
   writeFileSync(path.join(devcontainerDir, "devcontainer.json"), `${JSON.stringify(derived.config, null, 2)}\n`);
   // The CLI resolves local Features ("./<path>") relative to the config file and only accepts them under
   // <workspace-folder>/.devcontainer/ (lib/container.sh's _devcontainer passes stateDir as the workspace folder), so
-  // the config's own are copied beside it at the same relative paths, and devenv's into their own subdir.
+  // the config's own are copied beside it at the same relative paths, and devenv's linked in as their own subdir.
+  // That check is on the path as written, so the link passes it. The project's are copied rather than linked: a link
+  // would point back into the agent-writable worktree.
   for (const feature of localFeaturePaths(resolved.configuration)) {
     cpSync(path.join(source.configDir, feature), path.join(devcontainerDir, feature), { recursive: true });
   }
-  cpSync(context.featuresDir, path.join(devcontainerDir, DEVENV_FEATURES_SUBDIR), { recursive: true });
+  symlinkSync(context.featuresDir, path.join(devcontainerDir, DEVENV_FEATURES_SUBDIR));
 
   const git = resolveWorktreeGitLayout(context);
   // Pinned read-only by the override, so it has to exist as a mount source.
@@ -67,25 +69,32 @@ export async function generateWorktreeConfig(context: GeneratorContext): Promise
     service: derived.config.service,
     notices: [...derived.notices, ...notices],
     warnings: blockers,
-    inputsHash: hashInputs(devcontainerDir, overridePathOf(context), configSet?.hash ?? hashTopLevelFiles(source.configDir)),
+    inputsHash: hashInputs(devcontainerDir, context.featuresDir, overridePathOf(context), configSet?.hash ?? hashTopLevelFiles(source.configDir)),
   };
 }
 
 /**
- * Hash of the generated config, its local Features, the override, and a hash of the source's own files — a
- * project's approved config set, or for the default config every file beside it (compose file, Dockerfile, the
- * scripts it COPYs). Changes elsewhere in a build context aren't detected.
+ * Hash of the generated config, its local Features, devenv's Features, the override, and a hash of the source's own
+ * files — a project's approved config set, or for the default config every file beside it (compose file, Dockerfile,
+ * the scripts it COPYs). Changes elsewhere in a build context aren't detected.
  */
-function hashInputs(devcontainerDir: string, overridePath: string, sourceHash: string): string {
+function hashInputs(devcontainerDir: string, featuresDir: string, overridePath: string, sourceHash: string): string {
   const hash = createHash("sha256").update(sourceHash).update("\0").update(readFileSync(overridePath));
-  const generated = readdirSync(devcontainerDir, { recursive: true, withFileTypes: true })
+  // A recursive readdir doesn't descend into the linked devenv Features, so they're hashed from their source.
+  updateWithTree(hash, devcontainerDir, "");
+  updateWithTree(hash, featuresDir, DEVENV_FEATURES_SUBDIR);
+  return hash.digest("hex");
+}
+
+/** Feeds every regular file under a directory into a hash, by its path (under a prefix) and content, in sorted order. */
+function updateWithTree(hash: Hash, dir: string, prefix: string): void {
+  const files = readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name !== "devcontainer-lock.json")
     .map((entry) => path.join(entry.parentPath, entry.name))
     .sort();
-  for (const file of generated) {
-    hash.update("\0").update(path.relative(devcontainerDir, file)).update("\0").update(readFileSync(file));
+  for (const file of files) {
+    hash.update("\0").update(path.join(prefix, path.relative(dir, file))).update("\0").update(readFileSync(file));
   }
-  return hash.digest("hex");
 }
 
 /** Hash of the files directly inside a directory, by name and content. */
