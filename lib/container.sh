@@ -82,97 +82,26 @@ _open_vscode() {
     code --folder-uri "vscode-remote://attached-container+${hex}${CT_WORKDIR}"
 }
 
-# Generates the per-worktree compose override — the agent layer every devenv
-# container gets on top of its config's own service (CT_CONFIG's `service`,
-# so _container_write_config runs first):
-#
-# - Network: proxy_net ONLY, so the container's sole reach is Squid — no route
-#   to the approver (decision authority) or the internet except through it.
-#   proxy_net is owned by the shared stack and referenced by fixed name; compose
-#   can't depends_on across projects, hence _shared_ensure_up/_shared_wait_healthy.
-# - Claude config: CONTAINER_CLAUDE_DIR is this worktree's own data dir
-#   (CT_CLAUDE_DATA), so sessions, history and .claude.json survive rebuilds
-#   but are never shared — a shared session registry made every container list
-#   every other container's agents. From the host's own Claude config, only
-#   auth (read-write, for token refresh) and settings.json (read-only) are
-#   mounted on top. Everything else in ~/.claude and ~/.claude.json steers the
-#   HOST's Claude — settings hooks and mcpServers are commands it runs,
-#   skills/commands/rules/CLAUDE.md are instructions it follows — so a writable
-#   mount of any of it is a way out of the sandbox. The repo-tracked config is
-#   instead linked from the read-only /devenv by the agent Feature's
-#   postStartCommand (`devenv link`), and managed-settings.json is a link into
-#   /devenv.
-# - ~/devenv read-only, so the firewall allowlist and the compose/config files
-#   are out of a sandboxed process's reach, with worktrees/ masked by a
-#   read-only tmpfs: other repos' checkouts (uncommitted work, gitignored
-#   secrets like .env) stay hidden, and only the binds layered on top show.
-# - This worktree and its bare repo read-write at their mirrored paths, every
-#   other repo's bare .git read-only (committed history, for research), and
-#   read-only pins over everything git takes config/hooks from. Without those
-#   pins a sandboxed process could plant core.hooksPath/core.fsmonitor (or
-#   repoint a worktree's .git file or commondir at a config it controls) and
-#   get code execution on the host the next time git runs there.
-#
-# Known gap: submodule git dirs (<bare>/modules/) stay writable, so the same
-# applies to host-side submodule commands in repos that use submodules.
-_container_write_override() {
-    local bare="$WORKTREES_DIR/$CT_REPO/.git" gitdir admin other others=() service
-    gitdir="$(sed -n 's/^gitdir: //p' "$CT_PATH/.git")"
-    if [[ "$gitdir" == /* ]]; then
-        echo "error: $CT_PATH has an absolute gitdir link, which can't resolve inside the container" >&2
-        echo "  fix: git -C $CT_PATH worktree repair --relative-paths" >&2
+# Generates everything the devcontainer CLI runs from for the resolved worktree
+# — the generated devcontainer.json (+ local Features) in CT_STATE/.devcontainer
+# and the agent-layer compose override, CT_STATE/override.yaml — via
+# devcontainer/generator (TypeScript, on Bun). The rationale for every mount,
+# pin and setting in the agent layer lives there (src/override.ts).
+_container_generate() {
+    _require_devcontainer_cli
+    command -v bun &>/dev/null || {
+        echo "error: bun is required (https://bun.sh)" >&2
         exit 1
-    fi
-    admin="$(realpath -m "$CT_PATH/$gitdir")"
-    for other in "$WORKTREES_DIR"/*/.git; do
-        [[ -d "$other" && "$other" != "$bare" ]] && others+=("$other")
-    done
-    service="$(jq -r '.service' "$CT_CONFIG")"
-    mkdir -p "$CT_STATE" "$bare/hooks"
-
+    }
     jq -n \
-        --arg host "$REPO_DIR" --arg ct "$CONTAINER_REPO_DIR" --arg claude "$CONTAINER_CLAUDE_DIR" \
-        --arg home "$HOME" --arg pn "$CT_PN" --arg service "$service" --arg proxynet "$SHARED_PROXY_NET" \
-        --arg claudedata "$CT_CLAUDE_DATA" \
-        --arg wt "$CT_PATH" --arg bare "$bare" --arg admin "$admin" '
-        def mount($target; $ro): {type: "bind", source: ., target: $target, read_only: $ro};
-        def bind($ro): mount($ct + ltrimstr($host); $ro);
-        def claude($entry; $ro): ($home + "/.claude/" + $entry) | mount($claude + "/" + $entry; $ro);
-        {
-            name: $pn,
-            services: {($service): {
-                container_name: ($pn + "-devcontainer"),
-                working_dir: ($ct + ($wt | ltrimstr($host))),
-                networks: ["proxy_net"],
-                environment: {
-                    HTTP_PROXY: "http://firewall:3128",
-                    HTTPS_PROXY: "http://firewall:3128",
-                    http_proxy: "http://firewall:3128",
-                    https_proxy: "http://firewall:3128",
-                    NO_PROXY: "localhost,127.0.0.1",
-                    no_proxy: "localhost,127.0.0.1",
-                    # Node 22+ built-in http/https only honor the proxy vars with this.
-                    NODE_USE_ENV_PROXY: "1",
-                    CLAUDE_CONFIG_DIR: $claude
-                },
-                volumes: ([
-                    ($host | mount($ct; true)),
-                    {type: "tmpfs", target: ($ct + "/worktrees"), read_only: true},
-                    ($claudedata | mount($claude; false)),
-                    claude(".credentials.json"; false),
-                    claude("settings.json"; true),
-                    ($wt | bind(false)),
-                    ($wt + "/.git" | bind(true)),
-                    ($bare | bind(false)),
-                    ($bare + "/config" | bind(true)),
-                    ($bare + "/hooks" | bind(true)),
-                    ($bare + "/worktrees" | bind(true)),
-                    ($admin | bind(false)),
-                    ($admin + "/commondir" | bind(true))
-                ] + [$ARGS.positional[] | bind(true)])
-            }},
-            networks: {proxy_net: {external: true, name: $proxynet}}
-        }' --args "${others[@]}" > "$CT_STATE/override.json"
+        --arg repoDir "$REPO_DIR" --arg worktreesDir "$WORKTREES_DIR" --arg repo "$CT_REPO" \
+        --arg worktreePath "$CT_PATH" --arg projectName "$CT_PN" --arg home "$HOME" \
+        --arg stateDir "$CT_STATE" --arg claudeDataDir "$CT_CLAUDE_DATA" \
+        --arg containerRepoDir "$CONTAINER_REPO_DIR" --arg containerClaudeDir "$CONTAINER_CLAUDE_DIR" \
+        --arg proxyNetwork "$SHARED_PROXY_NET" --arg defaultConfig "$DEFAULT_CONFIG" \
+        --arg featuresDir "$DEVENV_FEATURES_DIR" --arg devcontainerCli "$DEVCONTAINER_CLI" \
+        '$ARGS.named' \
+        | bun "$REPO_DIR/devcontainer/generator/src/cli.ts" >/dev/null
 }
 
 # Creates the worktree's Claude data dir on first use, with a .claude.json that
@@ -208,36 +137,6 @@ _container_exec() {
     docker exec "${tty[@]}" "${user[@]}" -w "$CT_WORKDIR" "$CT_PN-devcontainer" "$@"
 }
 
-# Generates the devcontainer.json the CLI actually runs from: the source config
-# plus the per-worktree fields no devcontainer variable can express — the
-# mirrored workspaceFolder, and compose paths made absolute (the generated file
-# lives in CT_STATE, not beside its compose files) with override.json last —
-# and the agent Feature, which every devenv container gets.
-_container_write_config() {
-    local source="$DEFAULT_CONFIG" parsed
-    _require_devcontainer_cli
-    mkdir -p "$CT_STATE/.devcontainer"
-    # read-configuration rather than jq on the raw file: configs are JSONC.
-    parsed="$("$DEVCONTAINER_CLI" read-configuration --workspace-folder "$CT_PATH" --config "$source" 2>/dev/null)" || {
-        echo "error: couldn't read $source (run: $DEVCONTAINER_CLI read-configuration --workspace-folder $CT_PATH --config $source)" >&2
-        exit 1
-    }
-    printf '%s' "$parsed" | jq \
-        --arg dir "$(dirname "$source")" --arg override "$CT_STATE/override.json" \
-        --arg wf "$CT_WORKDIR" '
-        .configuration
-        | del(.configFilePath)
-        | .dockerComposeFile = ([.dockerComposeFile | if type == "string" then [.] else . end | .[] | $dir + "/" + .] + [$override])
-        | .workspaceFolder = $wf
-        | .features["./features/agent"] = {}' > "$CT_CONFIG"
-
-    # The CLI resolves local Features ("./features/<id>") relative to the config
-    # file, and only accepts them under <workspace-folder>/.devcontainer/ (see
-    # _devcontainer) — hence CT_CONFIG's location and copying them beside it.
-    rm -rf "${CT_STATE:?}/.devcontainer/features"
-    cp -r "$DEVENV_FEATURES_DIR" "$CT_STATE/.devcontainer/features"
-}
-
 _require_devcontainer_cli() {
     [[ -x "$DEVCONTAINER_CLI" ]] || {
         echo "error: devcontainer CLI not installed (run: devenv update)" >&2
@@ -253,10 +152,10 @@ _require_devcontainer_cli() {
 # Features under <workspace-folder>/.devcontainer/, and the worktree is
 # writable from inside the container — Feature install scripts run as root at
 # build time. In compose mode the CLI mounts nothing from the workspace folder
-# (override.json does the mounting); it only uses it to locate local Features
+# (override.yaml does the mounting); it only uses it to locate local Features
 # and to label the container so later calls find it again. Config variables
 # like ${localWorkspaceFolder} were already resolved against the worktree by
-# _container_write_config's read-configuration.
+# the generator's read-configuration.
 #
 # BUILDX_BAKE_ENTITLEMENTS_FS=0: Buildx >= 0.37.2 refuses the CLI's generated
 # Dockerfile-with-features because it sits outside the build context, which
@@ -273,7 +172,7 @@ _devcontainer() {
 # file, Dockerfile, scripts it COPYs). Changes elsewhere in a build context
 # aren't detected.
 _container_inputs_hash() {
-    cat "$CT_CONFIG" "$CT_STATE/override.json" \
+    cat "$CT_CONFIG" "$CT_STATE/override.yaml" \
         $(find "$CT_STATE/.devcontainer/features" -type f 2>/dev/null | sort) \
         $(find "$(dirname "$DEFAULT_CONFIG")" -maxdepth 1 -type f | sort) | sha256sum | cut -d' ' -f1
 }
@@ -353,8 +252,7 @@ _container_up() {
     local rebuild="${1:-0}"
     _shared_ensure_up
     _shared_wait_healthy
-    _container_write_config
-    _container_write_override
+    _container_generate
     _container_seed_claude_data
     _container_ensure_volume shared-pnpm-store
     _container_ensure_volume ka-jo-zsh-history
@@ -411,8 +309,7 @@ cmd_container_attach() {
     fi
 
     _container_resolve "$repo" "$branch"
-    _container_write_config
-    _container_write_override
+    _container_generate
     if [[ "$code" -eq 1 ]]; then
         _open_vscode
     else

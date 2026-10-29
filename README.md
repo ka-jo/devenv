@@ -21,6 +21,7 @@ devcontainer/                 # dev container base — referenced directly by `d
   Dockerfile                  #   Ubuntu 26.04 base, minus its stock UID-1000 user
   features/fnm/               #   local Feature: pinned, checksum-verified fnm + standalone pnpm
   features/agent/             #   local Feature injected into every container: Claude Code, claude-wrapper alias, git >= 2.48 gate
+  generator/                  #   TypeScript (Bun) package that generates each worktree's config + compose override
   infra/                      #   Squid firewall + egress approver — ONE shared instance for all worktrees
     docker-compose.yml        #     approver + firewall services (see lib/container.sh _shared_*)
     approver/                 #     Bun/TypeScript egress approval broker (see approver/PROTOCOL.md)
@@ -128,7 +129,7 @@ devenv container down my-repo feature/my-branch    # stop
 devenv container list                              # see what's running, across all worktrees
 ```
 
-`up` drives the [devcontainer CLI](https://github.com/devcontainers/cli) from the default config in `devcontainer/` (nothing is copied into the worktree), generating a per-worktree config and mount override in `~/.local/state/devenv/<project>/`, outside every container's mounts. An existing container is never recreated implicitly: if its config or image inputs changed, `up` warns, and `up --rebuild` recreates it (discarding container-local state such as background agent sessions). VS Code doesn't own the container lifecycle here — start/stop it with the CLI, and if you want VS Code attached, use **Attach to Running Container** against `${COMPOSE_PROJECT_NAME}-devcontainer` (i.e. `<repo>-<branch>-devcontainer`) once it's up.
+`up` drives the [devcontainer CLI](https://github.com/devcontainers/cli) from the default config in `devcontainer/` (nothing is copied into the worktree), generating a per-worktree config and compose override (via `devcontainer/generator/`) in `~/.local/state/devenv/<project>/`, outside every container's mounts. An existing container is never recreated implicitly: if its config or image inputs changed, `up` warns, and `up --rebuild` recreates it (discarding state kept only in the container's own filesystem — Claude sessions and history survive, since they live in the worktree's data dir). VS Code doesn't own the container lifecycle here — start/stop it with the CLI, and if you want VS Code attached, use **Attach to Running Container** against `${COMPOSE_PROJECT_NAME}-devcontainer` (i.e. `<repo>-<branch>-devcontainer`) once it's up.
 
 Each worktree's container:
 

@@ -1,0 +1,18 @@
+{
+  "name": "devenv-generator",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Generates the per-worktree dev container config devenv runs the devcontainer CLI from.",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^7.0.2"
+  }
+}
