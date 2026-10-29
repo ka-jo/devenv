@@ -97,3 +97,9 @@ networks:
     name: devenv-shared_proxy_net
     driver: bridge
     internal: true
+    driver_opts:
+      # `internal` alone still gives the host side of the bridge an address (the
+      # network's gateway), and traffic to it isn't blocked: containers could
+      # reach any host service listening on 0.0.0.0 through it, bypassing Squid.
+      # Without a host-side address, containers reach only each other.
+      com.docker.network.bridge.inhibit_ipv4: "true"
