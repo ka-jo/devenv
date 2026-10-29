@@ -30,6 +30,15 @@ DEFAULT_CONFIG="$REPO_DIR/devcontainer/devcontainer.json"
 # devenv's local Features. `agent` is injected into every generated config;
 # the rest are available to configs that reference them as ./features/<id>.
 DEVENV_FEATURES_DIR="$REPO_DIR/devcontainer/features"
+# Colored only when stderr is a terminal and NO_COLOR (no-color.org) is unset.
+if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
+    COLOR_NOTE=$'\e[36m' COLOR_WARNING=$'\e[1;33m' COLOR_RESET=$'\e[0m'
+else
+    COLOR_NOTE="" COLOR_WARNING="" COLOR_RESET=""
+fi
+
+_note() { printf '%snote: %s%s\n' "$COLOR_NOTE" "$1" "$COLOR_RESET" >&2; }
+_warn() { printf '%swarning: %s%s\n' "$COLOR_WARNING" "$1" "$COLOR_RESET" >&2; }
 
 _container_ensure_volume() {
     local name="$1"
@@ -100,8 +109,9 @@ _container_generate() {
     local result
     result="$(_container_context_json "$1" "$2" | bun "$REPO_DIR/devcontainer/generator/src/cli.ts")" || exit 1
     CT_INPUTS_HASH="$(printf '%s' "$result" | jq -r '.inputsHash')"
-    printf '%s' "$result" | jq -r '.notices[] | "note: \(.)"' >&2
-    printf '%s' "$result" | jq -r '.warnings[] | "warning: \(.)"' >&2
+    local line
+    while IFS= read -r line; do _note "$line"; done < <(printf '%s' "$result" | jq -r '.notices[]')
+    while IFS= read -r line; do _warn "$line"; done < <(printf '%s' "$result" | jq -r '.warnings[]')
 }
 
 # The JSON context devcontainer/generator's entry points read on stdin.
@@ -286,7 +296,7 @@ _container_up() {
         up_args+=(--remove-existing-container)
     elif [[ "$is_creating" -eq 0 ]]; then
         if [[ "$(cat "$CT_STATE/created.sha256" 2>/dev/null)" != "$hash" ]]; then
-            echo "warning: config changed since this container was created; run 'devenv container up $CT_REPO $CT_BRANCH --rebuild' (or down/up) to apply it" >&2
+            _warn "config changed since this container was created; run 'devenv container up $CT_REPO $CT_BRANCH --rebuild' (or down/up) to apply it"
         fi
     fi
     result="$(_devcontainer up "${up_args[@]}")" || {
