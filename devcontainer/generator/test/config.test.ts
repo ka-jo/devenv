@@ -1,50 +1,85 @@
 import { describe, expect, test } from "bun:test";
-import { deriveGeneratedConfig } from "../src/config.ts";
+import { deriveGeneratedConfig, localFeaturePaths } from "../src/config.ts";
 import { GeneratorError } from "../src/errors.ts";
 
 const inputs = {
   sourceDir: "/home/u/devenv/devcontainer",
   overridePath: "/home/u/.local/state/devenv/r-main/override.yaml",
   workspaceFolder: "/devenv/worktrees/r/main",
+  isDefault: false,
 };
 
 describe("deriveGeneratedConfig", () => {
   test("makes compose paths absolute and appends the override last", () => {
-    const generated = deriveGeneratedConfig(
+    const { config, composeFiles } = deriveGeneratedConfig(
       { service: "app", dockerComposeFile: ["docker-compose.yml", "../other.yml"] },
       inputs,
     );
-    expect(generated.dockerComposeFile).toEqual([
-      "/home/u/devenv/devcontainer/docker-compose.yml",
-      "/home/u/devenv/other.yml",
-      inputs.overridePath,
-    ]);
+    expect(composeFiles).toEqual(["/home/u/devenv/devcontainer/docker-compose.yml", "/home/u/devenv/other.yml"]);
+    expect(config.dockerComposeFile).toEqual([...composeFiles, inputs.overridePath]);
   });
 
   test("accepts a single compose path", () => {
-    const generated = deriveGeneratedConfig({ service: "app", dockerComposeFile: "compose.yml" }, inputs);
-    expect(generated.dockerComposeFile).toEqual(["/home/u/devenv/devcontainer/compose.yml", inputs.overridePath]);
+    const { composeFiles } = deriveGeneratedConfig({ service: "app", dockerComposeFile: "compose.yml" }, inputs);
+    expect(composeFiles).toEqual(["/home/u/devenv/devcontainer/compose.yml"]);
   });
 
-  test("sets the mirrored workspace folder and injects the agent Feature alongside existing ones", () => {
-    const generated = deriveGeneratedConfig(
-      { service: "app", dockerComposeFile: "compose.yml", features: { "./features/fnm": {} } },
+  test("sets the mirrored workspace folder and injects devenv's agent Feature from its own subdir", () => {
+    const { config } = deriveGeneratedConfig(
+      { service: "app", dockerComposeFile: "compose.yml", workspaceFolder: "/workspaces/x", features: { "./features/fnm": {} } },
       inputs,
     );
-    expect(generated.workspaceFolder).toBe(inputs.workspaceFolder);
-    expect(generated.features).toEqual({ "./features/fnm": {}, "./features/agent": {} });
+    expect(config.workspaceFolder).toBe(inputs.workspaceFolder);
+    expect(config.features).toEqual({ "./features/fnm": {}, "./.devenv-features/agent": {} });
+  });
+
+  test("strips a project's initializeCommand, which would run on the host, and says so", () => {
+    const { config, notices } = deriveGeneratedConfig(
+      { service: "app", dockerComposeFile: "compose.yml", initializeCommand: "touch /tmp/x" },
+      inputs,
+    );
+    expect(config).not.toHaveProperty("initializeCommand");
+    expect(notices).toEqual(["initializeCommand removed (it would run on the host)"]);
+  });
+
+  test("keeps the default config's initializeCommand", () => {
+    const { config, notices } = deriveGeneratedConfig(
+      { service: "app", dockerComposeFile: "compose.yml", initializeCommand: "true" },
+      { ...inputs, isDefault: true },
+    );
+    expect(config.initializeCommand).toBe("true");
+    expect(notices).toEqual([]);
+  });
+
+  test("turns on updateRemoteUserUID for project configs only", () => {
+    const source = { service: "app", dockerComposeFile: "compose.yml", updateRemoteUserUID: false };
+    expect(deriveGeneratedConfig(source, inputs).config.updateRemoteUserUID).toBe(true);
+    expect(deriveGeneratedConfig(source, { ...inputs, isDefault: true }).config.updateRemoteUserUID).toBe(false);
   });
 
   test("drops read-configuration's configFilePath and keeps everything else", () => {
-    const generated = deriveGeneratedConfig(
+    const { config } = deriveGeneratedConfig(
       { service: "app", dockerComposeFile: "compose.yml", remoteUser: "ka-jo", configFilePath: { fsPath: "/x" } },
       inputs,
     );
-    expect(generated).not.toHaveProperty("configFilePath");
-    expect(generated.remoteUser).toBe("ka-jo");
+    expect(config).not.toHaveProperty("configFilePath");
+    expect(config.remoteUser).toBe("ka-jo");
   });
 
   test("rejects configs that aren't compose-based", () => {
     expect(() => deriveGeneratedConfig({ image: "ubuntu" }, inputs)).toThrow(GeneratorError);
+  });
+});
+
+describe("localFeaturePaths", () => {
+  test("lists ./ Features as relative paths and ignores registry ones", () => {
+    expect(localFeaturePaths({ features: { "./features/a": {}, "ghcr.io/x/y:1": {}, "./b/../features/c": {} } })).toEqual([
+      "features/a",
+      "features/c",
+    ]);
+  });
+
+  test("rejects a local Feature outside the config's directory", () => {
+    expect(() => localFeaturePaths({ features: { "../outside": {} } })).toThrow(GeneratorError);
   });
 });

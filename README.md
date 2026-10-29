@@ -87,10 +87,11 @@ devenv clone <url> [name]                      bare-clone a repo into worktrees/
 devenv worktree add <repo> <branch> [base]     add a worktree at worktrees/<repo>/<branch>
 devenv worktree rm <repo> <branch> [--force]   remove a worktree and delete its local branch
 devenv worktree list [repo]                    list worktrees for one repo, or all repos
-devenv container up <repo> <branch> [--rebuild]  build/start a worktree's dev container (and the shared firewall stack, if needed)
+devenv container up <repo> <branch> [--rebuild] [--default]  build/start a worktree's dev container (and the shared firewall stack, if needed)
 devenv container down <repo> <branch>          stop a worktree's dev container (and the shared firewall stack, if it was the last one)
 devenv container attach <repo> <branch>        exec a zsh shell in a running dev container
 devenv container list                          list running devenv-managed containers, including the shared stack
+devenv container trust <repo> <branch>         review and approve a project's own .devcontainer config
 devenv install-extension [--skip-build]        install the egress approver VS Code extension on Windows
 ```
 
@@ -130,6 +131,14 @@ devenv container list                              # see what's running, across 
 ```
 
 `up` drives the [devcontainer CLI](https://github.com/devcontainers/cli) from the default config in `devcontainer/` (nothing is copied into the worktree), generating a per-worktree config and compose override (via `devcontainer/generator/`) in `~/.local/state/devenv/<project>/`, outside every container's mounts. An existing container is never recreated implicitly: if its config or image inputs changed, `up` warns, and `up --rebuild` recreates it (discarding state kept only in the container's own filesystem — Claude sessions and history survive, since they live in the worktree's data dir). VS Code doesn't own the container lifecycle here — start/stop it with the CLI, and if you want VS Code attached, use **Attach to Running Container** against `${COMPOSE_PROJECT_NAME}-devcontainer` (i.e. `<repo>-<branch>-devcontainer`) once it's up.
+
+**Projects with their own dev container config.** If a worktree has `.devcontainer/devcontainer.json` (or `.devcontainer.json`), `up` builds from it instead of devenv's default — compose-based configs for now — and layers devenv's agent sandbox on top. Because that config lives in the worktree (which the agent can write) and builds run with full network access, it's treated as untrusted:
+
+- It must pass devenv's sandbox rules (no privileged containers, host namespaces, dangerous capabilities, devices, runtime sockets, or host paths outside the worktree — for every service, and for whatever its Features and base image add). A violation is reported with the rule's name; `up --default` uses devenv's default config instead.
+- It must be approved: `devenv container trust <repo> <branch>` shows the config files (on later changes, just the diff since the last approval) and records approval of exactly that content. Approval is per repo, so every branch with the same config shares it; any change needs a new one.
+- devenv then adjusts it so it can't reach out or collide with other worktrees, and tells you what changed: project networks become internal (sidecars get no internet), published ports and fixed subnets/sidecar container names are removed, and `initializeCommand` (which would run on your host) is dropped.
+
+If the config changes while a container is already running, `up` keeps the running container and warns; `up --rebuild` re-checks it (with the worktree's containers stopped, so nothing can change it mid-check) before building.
 
 Each worktree's container:
 

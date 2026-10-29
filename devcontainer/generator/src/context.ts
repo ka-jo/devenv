@@ -11,6 +11,8 @@ export interface GeneratorContext {
   readonly worktreesDir: string;
   /** Repo name, the `<repo>` in `worktrees/<repo>/<branch>`. */
   readonly repo: string;
+  /** Branch name, the `<branch>` in `worktrees/<repo>/<branch>`. */
+  readonly branch: string;
   /** Host path of the worktree checkout. */
   readonly worktreePath: string;
   /** Compose project name, `<repo>-<branch>` normalized. */
@@ -33,11 +35,20 @@ export interface GeneratorContext {
   readonly featuresDir: string;
   /** Path of the pinned devcontainer CLI executable. */
   readonly devcontainerCli: string;
+  /** Host-only directory of approved project config snapshots, shared by every worktree; never mounted. */
+  readonly trustDir: string;
+  /** Whether to use {@link GeneratorContext.defaultConfig} even when the project has its own config. */
+  readonly shouldForceDefault: boolean;
+  /**
+   * Whether this run precedes building and creating a container. Only then do a project config's violations or
+   * missing approval block; for an existing container nothing would be built from them, so they're warnings.
+   */
+  readonly isCreating: boolean;
 }
 
 /**
- * Parses the JSON context `lib/container.sh` sends, checking every {@link GeneratorContext} field is a non-empty
- * string.
+ * Parses the JSON context `lib/container.sh` sends, checking every {@link GeneratorContext} field is present: paths
+ * and names as non-empty strings, flags as booleans.
  *
  * @param json - The raw JSON text.
  * @returns The validated context.
@@ -61,11 +72,19 @@ export function parseGeneratorContext(json: string): GeneratorContext {
     }
     return value;
   };
+  const flag = (key: keyof GeneratorContext): boolean => {
+    const value = record[key];
+    if (typeof value !== "boolean") {
+      throw new GeneratorError(`generator context is missing "${key}"`);
+    }
+    return value;
+  };
 
   return {
     repoDir: field("repoDir"),
     worktreesDir: field("worktreesDir"),
     repo: field("repo"),
+    branch: field("branch"),
     worktreePath: field("worktreePath"),
     projectName: field("projectName"),
     home: field("home"),
@@ -77,5 +96,8 @@ export function parseGeneratorContext(json: string): GeneratorContext {
     defaultConfig: field("defaultConfig"),
     featuresDir: field("featuresDir"),
     devcontainerCli: field("devcontainerCli"),
+    trustDir: field("trustDir"),
+    shouldForceDefault: flag("shouldForceDefault"),
+    isCreating: flag("isCreating"),
   };
 }

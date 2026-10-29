@@ -11,6 +11,17 @@ export type GeneratedConfig = DevcontainerConfig & {
   readonly service: string;
 };
 
+/** A source config as the devcontainer CLI resolves it. */
+export interface ResolvedSourceConfig {
+  /** The config as written (JSONC and `${...}` variables resolved). */
+  readonly configuration: DevcontainerConfig;
+  /**
+   * The config plus everything its Features (and an already-built image's metadata label) contribute; only resolved
+   * when asked for, otherwise the config itself.
+   */
+  readonly merged: DevcontainerConfig;
+}
+
 /** The per-worktree values {@link deriveGeneratedConfig} writes into a source config. */
 export interface GeneratedConfigInputs {
   /** Directory of the source `devcontainer.json`, which its relative compose paths resolve against. */
@@ -19,7 +30,22 @@ export interface GeneratedConfigInputs {
   readonly overridePath: string;
   /** Container path of the worktree. */
   readonly workspaceFolder: string;
+  /** Whether the source is devenv's own default config rather than a project's. */
+  readonly isDefault: boolean;
 }
+
+/** A derived config plus what was changed in the source, for reporting to the user. */
+export interface DerivedConfig {
+  /** The config the CLI runs from. */
+  readonly config: GeneratedConfig;
+  /** Absolute paths of the source's compose files, in merge order. */
+  readonly composeFiles: readonly string[];
+  /** One line per change made to the project's own config. */
+  readonly notices: readonly string[];
+}
+
+/** Where devenv's own Features go inside the generated `.devcontainer/`, apart from any of the project's. */
+export const DEVENV_FEATURES_SUBDIR = ".devenv-features";
 
 /**
  * Parses a `devcontainer.json` through the devcontainer CLI's `read-configuration`, so JSONC and `${...}` variables
@@ -27,12 +53,27 @@ export interface GeneratedConfigInputs {
  *
  * @param context - Supplies the CLI path and the worktree.
  * @param configPath - The `devcontainer.json` to read.
- * @returns The parsed config.
+ * @param shouldMerge - Whether to also resolve what its Features contribute. That resolution only accepts local
+ * Features under the worktree's `.devcontainer/`, so it fails for devenv's default config — which needs no merged view,
+ * as it's never validated.
+ * @returns The config, and the config merged with what its Features contribute.
  * @throws {@link GeneratorError} when the CLI can't read it.
  */
-export async function readSourceConfig(context: GeneratorContext, configPath: string): Promise<DevcontainerConfig> {
+export async function readSourceConfig(
+  context: GeneratorContext,
+  configPath: string,
+  shouldMerge: boolean,
+): Promise<ResolvedSourceConfig> {
   const proc = Bun.spawn(
-    [context.devcontainerCli, "read-configuration", "--workspace-folder", context.worktreePath, "--config", configPath],
+    [
+      context.devcontainerCli,
+      "read-configuration",
+      "--workspace-folder",
+      context.worktreePath,
+      "--config",
+      configPath,
+      ...(shouldMerge ? ["--include-merged-configuration"] : []),
+    ],
     { stdout: "pipe", stderr: "pipe" },
   );
   const [output, errors, exitCode] = await Promise.all([
@@ -41,16 +82,19 @@ export async function readSourceConfig(context: GeneratorContext, configPath: st
     proc.exited,
   ]);
   if (exitCode !== 0) {
-    throw new GeneratorError(`couldn't read ${configPath}:\n${errors.trim()}`);
+    // The CLI logs its whole progress to stderr; only its error lines say what went wrong.
+    const errorLines = errors.split("\n").filter((line) => /\bError\b|\bERR\b/.test(line));
+    const reason = (errorLines.length > 0 ? errorLines : errors.trim().split("\n").slice(-1)).join("\n");
+    throw new GeneratorError(`couldn't read ${configPath}: ${reason.replace(/^\[[^\]]*\]\s*/gm, "")}`);
   }
 
   const parsed: unknown = JSON.parse(output);
-  const configuration =
-    typeof parsed === "object" && parsed !== null && "configuration" in parsed ? parsed.configuration : undefined;
-  if (typeof configuration !== "object" || configuration === null) {
+  const configuration = objectField(parsed, "configuration");
+  const merged = shouldMerge ? objectField(parsed, "mergedConfiguration") : configuration;
+  if (configuration === undefined || merged === undefined) {
     throw new GeneratorError(`read-configuration returned no configuration for ${configPath}`);
   }
-  return { ...configuration };
+  return { configuration, merged };
 }
 
 /**
@@ -62,7 +106,7 @@ export async function readSourceConfig(context: GeneratorContext, configPath: st
  * @returns The generated config; `source` is not modified.
  * @throws {@link GeneratorError} when `source` isn't a compose-based config.
  */
-export function deriveGeneratedConfig(source: DevcontainerConfig, inputs: GeneratedConfigInputs): GeneratedConfig {
+export function deriveGeneratedConfig(source: DevcontainerConfig, inputs: GeneratedConfigInputs): DerivedConfig {
   const { service, dockerComposeFile } = source;
   if (typeof service !== "string" || dockerComposeFile === undefined) {
     throw new GeneratorError("only compose-based dev container configs (dockerComposeFile + service) are supported");
@@ -71,16 +115,58 @@ export function deriveGeneratedConfig(source: DevcontainerConfig, inputs: Genera
   if (!Array.isArray(composeFiles) || !composeFiles.every((file): file is string => typeof file === "string")) {
     throw new GeneratorError("dockerComposeFile must be a path or a list of paths");
   }
+  const absoluteComposeFiles = composeFiles.map((file) => path.resolve(inputs.sourceDir, file));
 
-  // read-configuration adds this; it isn't part of the devcontainer.json schema.
-  const { configFilePath: _, ...config } = source;
+  const notices: string[] = [];
+  // read-configuration adds configFilePath; it isn't part of the devcontainer.json schema. initializeCommand runs on
+  // the HOST, so a project's would be host code execution from an agent-writable file.
+  const { configFilePath: _, initializeCommand, ...config } = source;
+  if (initializeCommand !== undefined && !inputs.isDefault) {
+    notices.push("initializeCommand removed (it would run on the host)");
+  }
   const features = typeof source.features === "object" && source.features !== null ? source.features : {};
+
   return {
-    ...config,
-    service,
-    // Absolute because the generated file doesn't live beside them; the override goes last so it wins.
-    dockerComposeFile: [...composeFiles.map((file) => path.resolve(inputs.sourceDir, file)), inputs.overridePath],
-    workspaceFolder: inputs.workspaceFolder,
-    features: { ...features, "./features/agent": {} },
+    config: {
+      ...config,
+      ...(inputs.isDefault && initializeCommand !== undefined ? { initializeCommand } : {}),
+      service,
+      // Absolute because the generated file doesn't live beside them; the override goes last so it wins.
+      dockerComposeFile: [...absoluteComposeFiles, inputs.overridePath],
+      workspaceFolder: inputs.workspaceFolder,
+      features: { ...features, [`./${DEVENV_FEATURES_SUBDIR}/agent`]: {} },
+      // A project image's user rarely has the host user's UID, which every read-write bind mount needs.
+      ...(inputs.isDefault ? {} : { updateRemoteUserUID: true }),
+    },
+    composeFiles: absoluteComposeFiles,
+    notices,
   };
+}
+
+/**
+ * Lists the local Features (`./<path>` keys) a config uses, as paths relative to its directory.
+ *
+ * @param source - The parsed source config.
+ * @returns Relative paths, e.g. `features/foo`.
+ * @throws {@link GeneratorError} when a path leaves the config's directory, which the CLI wouldn't accept either.
+ */
+export function localFeaturePaths(source: DevcontainerConfig): string[] {
+  const features = typeof source.features === "object" && source.features !== null ? Object.keys(source.features) : [];
+  return features
+    .filter((id) => id.startsWith("./") || id.startsWith("../"))
+    .map((id) => {
+      const relative = path.posix.normalize(id);
+      if (relative.startsWith("..")) {
+        throw new GeneratorError(`local Feature ${id} is outside the config's directory`);
+      }
+      return relative;
+    });
+}
+
+function objectField(value: unknown, key: string): DevcontainerConfig | undefined {
+  if (typeof value !== "object" || value === null || !(key in value)) {
+    return undefined;
+  }
+  const field: unknown = Reflect.get(value, key);
+  return typeof field === "object" && field !== null ? { ...field } : undefined;
 }

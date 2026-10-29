@@ -1,50 +1,32 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parse } from "yaml";
+import type { ComposeModel } from "../src/compose.ts";
 import type { GeneratorContext } from "../src/context.ts";
 import { GeneratorError } from "../src/errors.ts";
 import { resolveWorktreeGitLayout } from "../src/git.ts";
-import { buildOverride, type ComposeMount, renderOverride } from "../src/override.ts";
+import { buildOverride, COMPOSE_RESET, type ComposeMount, renderOverride } from "../src/override.ts";
+import { createHostFixture, type HostFixture } from "./fixtures.ts";
 
-let root: string;
+let fixture: HostFixture;
 let context: GeneratorContext;
 
-// A host layout like devenv's: <repoDir>/worktrees/<repo>/{.git (bare), <branch>/} with relative gitdir links.
 beforeAll(() => {
-  root = mkdtempSync(path.join(tmpdir(), "devenv-generator-"));
-  const repoDir = path.join(root, "devenv");
-  const worktreesDir = path.join(repoDir, "worktrees");
-  const worktreePath = path.join(worktreesDir, "r", "feat", "x");
-  mkdirSync(path.join(worktreesDir, "r", ".git", "worktrees", "x"), { recursive: true });
-  mkdirSync(path.join(worktreesDir, "other", ".git"), { recursive: true });
-  mkdirSync(path.join(worktreesDir, "not-a-repo"), { recursive: true });
-  mkdirSync(worktreePath, { recursive: true });
-  writeFileSync(path.join(worktreePath, ".git"), "gitdir: ../../.git/worktrees/x\n");
-
-  context = {
-    repoDir,
-    worktreesDir,
-    repo: "r",
-    worktreePath,
-    projectName: "r-feat-x",
-    home: "/home/u",
-    stateDir: path.join(root, "state"),
-    claudeDataDir: path.join(root, "data", "r-feat-x", "claude"),
-    containerRepoDir: "/devenv",
-    containerClaudeDir: "/.claude",
-    proxyNetwork: "devenv-shared_proxy_net",
-    defaultConfig: path.join(repoDir, "devcontainer", "devcontainer.json"),
-    featuresDir: path.join(repoDir, "devcontainer", "features"),
-    devcontainerCli: "/unused",
-  };
+  fixture = createHostFixture();
+  context = fixture.context;
 });
 
-afterAll(() => rmSync(root, { recursive: true, force: true }));
+afterAll(() => fixture.cleanup());
 
-function mountAt(mounts: readonly ComposeMount[], target: string): ComposeMount | undefined {
-  return mounts.find((mount) => mount.target === target);
+// What compose normalizes the default config to: one service on the implicit default network.
+const defaultModel: ComposeModel = {
+  services: { devcontainer: { networks: { default: null } } },
+  networks: { default: {} },
+};
+
+function mountAt(mounts: readonly ComposeMount[] | undefined, target: string): ComposeMount | undefined {
+  return mounts?.find((mount) => mount.target === target);
 }
 
 describe("resolveWorktreeGitLayout", () => {
@@ -56,39 +38,51 @@ describe("resolveWorktreeGitLayout", () => {
   });
 
   test("rejects an absolute gitdir link", () => {
-    const absolute = path.join(root, "absolute-wt");
+    const absolute = path.join(fixture.root, "absolute-wt");
     mkdirSync(absolute, { recursive: true });
     writeFileSync(path.join(absolute, ".git"), "gitdir: /somewhere/.git/worktrees/x\n");
     expect(() => resolveWorktreeGitLayout({ ...context, worktreePath: absolute })).toThrow(GeneratorError);
   });
+
+  test("rejects a directory that isn't a git worktree", () => {
+    expect(() => resolveWorktreeGitLayout({ ...context, worktreePath: fixture.root })).toThrow("not a git worktree");
+  });
 });
 
-describe("buildOverride", () => {
-  test("targets the given service with the fixed name, workdir, proxy network and env", () => {
-    const override = buildOverride(context, "app", resolveWorktreeGitLayout(context));
-    const app = override.services.app;
+describe("buildOverride: agent layer", () => {
+  test("targets the primary with the fixed name, workdir, proxy network and env", () => {
+    const { override } = buildOverride(context, defaultModel, "devcontainer", resolveWorktreeGitLayout(context));
+    const primary = override.services.devcontainer;
     expect(override.name).toBe("r-feat-x");
-    expect(app?.container_name).toBe("r-feat-x-devcontainer");
-    expect(app?.working_dir).toBe("/devenv/worktrees/r/feat/x");
-    expect(app?.networks).toEqual(["proxy_net"]);
+    expect(primary?.container_name).toBe("r-feat-x-devcontainer");
+    expect(primary?.working_dir).toBe("/devenv/worktrees/r/feat/x");
+    expect(primary?.environment?.HTTPS_PROXY).toBe("http://firewall:3128");
+    expect(primary?.environment?.CLAUDE_CONFIG_DIR).toBe("/.claude");
     expect(override.networks.proxy_net).toEqual({ external: true, name: "devenv-shared_proxy_net" });
-    expect(app?.environment.HTTPS_PROXY).toBe("http://firewall:3128");
-    expect(app?.environment.CLAUDE_CONFIG_DIR).toBe("/.claude");
+  });
+
+  test("keeps a lone primary on proxy_net only, defining no other network", () => {
+    const { override, notices } = buildOverride(context, defaultModel, "devcontainer", resolveWorktreeGitLayout(context));
+    expect(override.services.devcontainer?.networks).toEqual(["proxy_net"]);
+    expect(Object.keys(override.networks)).toEqual(["proxy_net"]);
+    expect(notices).toEqual([]);
   });
 
   test("mounts devenv read-only, masks worktrees, and takes only auth and read-only settings from ~/.claude", () => {
-    const volumes = buildOverride(context, "app", resolveWorktreeGitLayout(context)).services.app?.volumes ?? [];
+    const volumes = buildOverride(context, defaultModel, "devcontainer", resolveWorktreeGitLayout(context)).override
+      .services.devcontainer?.volumes;
     expect(mountAt(volumes, "/devenv")).toMatchObject({ source: context.repoDir, read_only: true });
     expect(mountAt(volumes, "/devenv/worktrees")).toEqual({ type: "tmpfs", target: "/devenv/worktrees", read_only: true });
     expect(mountAt(volumes, "/.claude")).toMatchObject({ source: context.claudeDataDir, read_only: false });
     expect(mountAt(volumes, "/.claude/.credentials.json")).toMatchObject({ read_only: false });
     expect(mountAt(volumes, "/.claude/settings.json")).toMatchObject({ read_only: true });
-    const hostClaudeMounts = volumes.filter((mount) => mount.type === "bind" && mount.source.startsWith("/home/u/.claude"));
-    expect(hostClaudeMounts).toHaveLength(2);
+    const hostClaude = (volumes ?? []).filter((mount) => mount.type === "bind" && mount.source.startsWith("/home/u/.claude"));
+    expect(hostClaude).toHaveLength(2);
   });
 
   test("mirrors the worktree and its repo with read-only git pins, and other repos read-only", () => {
-    const volumes = buildOverride(context, "app", resolveWorktreeGitLayout(context)).services.app?.volumes ?? [];
+    const volumes = buildOverride(context, defaultModel, "devcontainer", resolveWorktreeGitLayout(context)).override
+      .services.devcontainer?.volumes;
     const readOnlyOf = (target: string): boolean | undefined => mountAt(volumes, target)?.read_only;
     expect(readOnlyOf("/devenv/worktrees/r/feat/x")).toBe(false);
     expect(readOnlyOf("/devenv/worktrees/r/.git")).toBe(false);
@@ -104,9 +98,81 @@ describe("buildOverride", () => {
       expect(readOnlyOf(pinned)).toBe(true);
     }
   });
+});
 
-  test("renders YAML that parses back to the same override", () => {
-    const override = buildOverride(context, "app", resolveWorktreeGitLayout(context));
+describe("buildOverride: project fixes", () => {
+  const projectModel = (): ComposeModel => ({
+    services: {
+      app: {
+        networks: { backend: null },
+        ports: [{ target: 3000 }],
+        volumes: [{ type: "bind", source: context.worktreePath, target: "/workspaces/x" }],
+      },
+      cache: {
+        networks: { backend: null, default: null },
+        ports: [{ target: 6379 }],
+        container_name: "fixed",
+        volumes: [{ type: "bind", source: context.worktreePath, target: "/src" }],
+      },
+    },
+    networks: { backend: { ipam: { config: [{ subnet: "10.0.0.0/24" }] } }, default: {} },
+  });
+
+  test("puts the primary on its project networks plus proxy_net, keeping default when a sidecar shares it", () => {
+    const { override } = buildOverride(context, projectModel(), "app", resolveWorktreeGitLayout(context));
+    expect(override.services.app?.networks).toEqual(["backend", "proxy_net"]);
+    const sharedDefault: ComposeModel = {
+      services: { app: { networks: { default: null } }, cache: { networks: { default: null } } },
+      networks: { default: {} },
+    };
+    expect(buildOverride(context, sharedDefault, "app", resolveWorktreeGitLayout(context)).override.services.app?.networks).toEqual(
+      ["default", "proxy_net"],
+    );
+  });
+
+  test("makes every used project network internal with no host-side address, dropping fixed subnets", () => {
+    const { override, notices } = buildOverride(context, projectModel(), "app", resolveWorktreeGitLayout(context));
+    expect(override.networks.backend).toEqual({
+      internal: true,
+      driver_opts: { "com.docker.network.bridge.inhibit_ipv4": "true" },
+      ipam: COMPOSE_RESET,
+    });
+    expect(override.networks.default).toMatchObject({ internal: true });
+    expect(notices).toContain("network backend: fixed subnet removed (it would collide across worktrees)");
+  });
+
+  test("leaves external networks alone (validation rejects them)", () => {
+    const model: ComposeModel = { ...projectModel(), networks: { ...projectModel().networks, backend: { external: true } } };
+    expect(buildOverride(context, model, "app", resolveWorktreeGitLayout(context)).override.networks.backend).toBeUndefined();
+  });
+
+  test("resets published ports everywhere and container_name on sidecars only", () => {
+    const { override, notices } = buildOverride(context, projectModel(), "app", resolveWorktreeGitLayout(context));
+    expect(override.services.app?.ports).toBe(COMPOSE_RESET);
+    expect(override.services.cache?.ports).toBe(COMPOSE_RESET);
+    expect(override.services.cache?.container_name).toBe(COMPOSE_RESET);
+    expect(override.services.app?.container_name).toBe("r-feat-x-devcontainer");
+    expect(notices).toContain("service cache: container_name removed (it would collide across worktrees)");
+  });
+
+  test("pins the worktree's .git file read-only wherever any service mounts the whole worktree", () => {
+    const { override } = buildOverride(context, projectModel(), "app", resolveWorktreeGitLayout(context));
+    const gitFile = path.join(context.worktreePath, ".git");
+    expect(mountAt(override.services.app?.volumes, "/workspaces/x/.git")).toEqual({
+      type: "bind",
+      source: gitFile,
+      target: "/workspaces/x/.git",
+      read_only: true,
+    });
+    expect(mountAt(override.services.cache?.volumes, "/src/.git")).toMatchObject({ source: gitFile, read_only: true });
+  });
+});
+
+describe("renderOverride", () => {
+  test("renders resets as compose's !reset null and round-trips everything else", () => {
+    const { override } = buildOverride(context, defaultModel, "devcontainer", resolveWorktreeGitLayout(context));
     expect(parse(renderOverride(override))).toEqual(override);
+    const yaml = renderOverride({ name: "p", services: { app: { ports: COMPOSE_RESET } }, networks: {} });
+    expect(yaml).toContain("ports: !reset null");
   });
 });

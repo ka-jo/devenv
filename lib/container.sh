@@ -21,6 +21,9 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/devenv"
 # never reads or runs anything from it. Kept apart from STATE_DIR, which no
 # container may ever see.
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/devenv"
+# Approved project config snapshots, per repo (see devcontainer/generator/src/trust.ts).
+# Inside STATE_DIR, so like the rest of it never mounted into any container.
+TRUST_DIR="$STATE_DIR/trust"
 DEVCONTAINER_CLI="$REPO_DIR/node_modules/.bin/devcontainer"
 # The config used for any worktree whose project doesn't define its own.
 DEFAULT_CONFIG="$REPO_DIR/devcontainer/devcontainer.json"
@@ -85,9 +88,25 @@ _open_vscode() {
 # Generates everything the devcontainer CLI runs from for the resolved worktree
 # — the generated devcontainer.json (+ local Features) in CT_STATE/.devcontainer
 # and the agent-layer compose override, CT_STATE/override.yaml — via
-# devcontainer/generator (TypeScript, on Bun). The rationale for every mount,
-# pin and setting in the agent layer lives there (src/override.ts).
+# devcontainer/generator (TypeScript, on Bun), which also validates and checks
+# approval of a project's own config. The rationale for every mount, pin and
+# setting in the agent layer lives there (src/override.ts).
+#   $1: 1 when a container is about to be built/created (project-config
+#       violations and missing approval then block instead of warn)
+#   $2: 1 to use devenv's default config even if the project has its own
+# Sets CT_INPUTS_HASH: identifies everything the container is created from, for
+# drift detection.
 _container_generate() {
+    local result
+    result="$(_container_context_json "$1" "$2" | bun "$REPO_DIR/devcontainer/generator/src/cli.ts")" || exit 1
+    CT_INPUTS_HASH="$(printf '%s' "$result" | jq -r '.inputsHash')"
+    printf '%s' "$result" | jq -r '.notices[] | "note: \(.)"' >&2
+    printf '%s' "$result" | jq -r '.warnings[] | "warning: \(.)"' >&2
+}
+
+# The JSON context devcontainer/generator's entry points read on stdin.
+#   $1: isCreating (0/1), $2: shouldForceDefault (0/1)
+_container_context_json() {
     _require_devcontainer_cli
     command -v bun &>/dev/null || {
         echo "error: bun is required (https://bun.sh)" >&2
@@ -95,13 +114,15 @@ _container_generate() {
     }
     jq -n \
         --arg repoDir "$REPO_DIR" --arg worktreesDir "$WORKTREES_DIR" --arg repo "$CT_REPO" \
-        --arg worktreePath "$CT_PATH" --arg projectName "$CT_PN" --arg home "$HOME" \
-        --arg stateDir "$CT_STATE" --arg claudeDataDir "$CT_CLAUDE_DATA" \
+        --arg branch "$CT_BRANCH" --arg worktreePath "$CT_PATH" --arg projectName "$CT_PN" \
+        --arg home "$HOME" --arg stateDir "$CT_STATE" --arg claudeDataDir "$CT_CLAUDE_DATA" \
         --arg containerRepoDir "$CONTAINER_REPO_DIR" --arg containerClaudeDir "$CONTAINER_CLAUDE_DIR" \
         --arg proxyNetwork "$SHARED_PROXY_NET" --arg defaultConfig "$DEFAULT_CONFIG" \
         --arg featuresDir "$DEVENV_FEATURES_DIR" --arg devcontainerCli "$DEVCONTAINER_CLI" \
-        '$ARGS.named' \
-        | bun "$REPO_DIR/devcontainer/generator/src/cli.ts" >/dev/null
+        --arg trustDir "$TRUST_DIR" \
+        --argjson isCreating "$([[ "${1:-0}" -eq 1 ]] && echo true || echo false)" \
+        --argjson shouldForceDefault "$([[ "${2:-0}" -eq 1 ]] && echo true || echo false)" \
+        '$ARGS.named'
 }
 
 # Creates the worktree's Claude data dir on first use, with a .claude.json that
@@ -167,16 +188,6 @@ _devcontainer() {
         "$DEVCONTAINER_CLI" "$subcommand" --workspace-folder "$CT_STATE" --config "$CT_CONFIG" "$@")
 }
 
-# Hashes everything a container is created from: the generated config and
-# override, local Features, plus every file beside the source config (compose
-# file, Dockerfile, scripts it COPYs). Changes elsewhere in a build context
-# aren't detected.
-_container_inputs_hash() {
-    cat "$CT_CONFIG" "$CT_STATE/override.yaml" \
-        $(find "$CT_STATE/.devcontainer/features" -type f 2>/dev/null | sort) \
-        $(find "$(dirname "$DEFAULT_CONFIG")" -maxdepth 1 -type f | sort) | sha256sum | cut -d' ' -f1
-}
-
 _container_exists() {
     docker ps -a -q --filter "label=com.docker.compose.project=$CT_PN" | grep -q .
 }
@@ -224,11 +235,12 @@ _shared_maybe_down() {
 }
 
 cmd_container_up() {
-    local code=0 rebuild=0 args=()
+    local code=0 rebuild=0 use_default=0 args=()
     for a in "$@"; do
         case "$a" in
             --code) code=1 ;;
             --rebuild) rebuild=1 ;;
+            --default) use_default=1 ;;
             *) args+=("$a") ;;
         esac
     done
@@ -239,7 +251,7 @@ cmd_container_up() {
     fi
 
     _container_resolve "$repo" "$branch"
-    _container_up "$rebuild"
+    _container_up "$rebuild" "$use_default"
     echo "up: $CT_PN"
     if [[ "$code" -eq 1 ]]; then
         _open_vscode
@@ -247,12 +259,21 @@ cmd_container_up() {
 }
 
 # Creates or starts the resolved worktree's container (and the shared stack
-# first). Shared by `container up` and `agent up`. Pass 1 to recreate it.
+# first). Shared by `container up` and `agent up`.
+#   $1: 1 to recreate it, $2: 1 to use devenv's default config
 _container_up() {
-    local rebuild="${1:-0}"
+    local rebuild="${1:-0}" use_default="${2:-0}" is_creating=1
     _shared_ensure_up
     _shared_wait_healthy
-    _container_generate
+    if _container_exists && [[ "$rebuild" -ne 1 ]]; then
+        is_creating=0
+    elif _container_exists; then
+        # Only this worktree's containers can write its files, so with them
+        # stopped the config can't change between being checked and built.
+        echo "stopping $CT_PN so its config can't change while it's checked and rebuilt" >&2
+        docker compose -p "$CT_PN" stop >/dev/null
+    fi
+    _container_generate "$is_creating" "$use_default"
     _container_seed_claude_data
     _container_ensure_volume shared-pnpm-store
     _container_ensure_volume ka-jo-zsh-history
@@ -260,12 +281,10 @@ _container_up() {
     # The CLI never recreates an existing container on its own, so config
     # drift is reported rather than silently applied (recreating discards
     # container-local state, e.g. background agent sessions).
-    local hash is_creating=1 up_args=() result
-    hash="$(_container_inputs_hash)"
+    local hash="$CT_INPUTS_HASH" up_args=() result
     if [[ "$rebuild" -eq 1 ]]; then
         up_args+=(--remove-existing-container)
-    elif _container_exists; then
-        is_creating=0
+    elif [[ "$is_creating" -eq 0 ]]; then
         if [[ "$(cat "$CT_STATE/created.sha256" 2>/dev/null)" != "$hash" ]]; then
             echo "warning: config changed since this container was created; run 'devenv container up $CT_REPO $CT_BRANCH --rebuild' (or down/up) to apply it" >&2
         fi
@@ -317,6 +336,20 @@ cmd_container_attach() {
     fi
 }
 
+# Reviews the worktree's project dev container config against the repo's last
+# approved one and approves it on confirmation (devcontainer/generator's
+# trust-cli.ts). Approval is per repo and per exact content, so every worktree
+# of the repo with the same config shares it.
+cmd_container_trust() {
+    local repo="${1:-}" branch="${2:-}"
+    if [[ -z "$repo" || -z "$branch" ]]; then
+        _pick_worktree_any
+        repo="$PICK_REPO"; branch="$PICK_BRANCH"
+    fi
+    _container_resolve "$repo" "$branch"
+    _container_context_json 0 0 | bun "$REPO_DIR/devcontainer/generator/src/trust-cli.ts"
+}
+
 cmd_container_list() {
     docker ps -a --filter "label=com.docker.compose.project=$SHARED_PN" --format "$SHARED_PN	{{.Names}}	{{.Status}}"
     local repo branch pn
@@ -332,8 +365,9 @@ cmd_container() {
         down)   shift; cmd_container_down "$@" ;;
         attach) shift; cmd_container_attach "$@" ;;
         list)   shift; cmd_container_list "$@" ;;
+        trust)  shift; cmd_container_trust "$@" ;;
         *)
-            echo "usage: devenv container <up|down|attach|list> ..."
+            echo "usage: devenv container <up|down|attach|list|trust> ..."
             exit 1
             ;;
     esac

@@ -6,6 +6,7 @@ const complete = {
   repoDir: "/home/u/devenv",
   worktreesDir: "/home/u/devenv/worktrees",
   repo: "r",
+  branch: "main",
   worktreePath: "/home/u/devenv/worktrees/r/main",
   projectName: "r-main",
   home: "/home/u",
@@ -17,6 +18,9 @@ const complete = {
   defaultConfig: "/home/u/devenv/devcontainer/devcontainer.json",
   featuresDir: "/home/u/devenv/devcontainer/features",
   devcontainerCli: "/home/u/devenv/node_modules/.bin/devcontainer",
+  trustDir: "/home/u/.local/state/devenv/trust",
+  shouldForceDefault: false,
+  isCreating: true,
 };
 
 describe("parseGeneratorContext", () => {
@@ -36,5 +40,9 @@ describe("parseGeneratorContext", () => {
     const { repo: _, ...missingRepo } = complete;
     expect(() => parseGeneratorContext(JSON.stringify(missingRepo))).toThrow('missing "repo"');
     expect(() => parseGeneratorContext(JSON.stringify({ ...complete, home: "" }))).toThrow('missing "home"');
+  });
+
+  test("requires flags to be booleans", () => {
+    expect(() => parseGeneratorContext(JSON.stringify({ ...complete, isCreating: "true" }))).toThrow('missing "isCreating"');
   });
 });

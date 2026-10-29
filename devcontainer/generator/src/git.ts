@@ -22,9 +22,13 @@ export interface WorktreeGitLayout {
  */
 export function resolveWorktreeGitLayout(context: GeneratorContext): WorktreeGitLayout {
   const bare = path.join(context.worktreesDir, context.repo, ".git");
-  const gitdir = /^gitdir: (.+)$/m.exec(readFileSync(path.join(context.worktreePath, ".git"), "utf8"))?.[1]?.trim();
+  const gitFile = path.join(context.worktreePath, ".git");
+  if (!statSync(gitFile, { throwIfNoEntry: false })?.isFile()) {
+    throw new GeneratorError(`${context.worktreePath} is not a git worktree (no .git file)`);
+  }
+  const gitdir = /^gitdir: (.+)$/m.exec(readFileSync(gitFile, "utf8"))?.[1]?.trim();
   if (gitdir === undefined) {
-    throw new GeneratorError(`${context.worktreePath}/.git has no gitdir link`);
+    throw new GeneratorError(`${gitFile} has no gitdir link`);
   }
   if (path.isAbsolute(gitdir)) {
     throw new GeneratorError(
