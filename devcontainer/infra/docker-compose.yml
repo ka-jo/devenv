@@ -14,6 +14,9 @@ services:
     build:
       context: approver
       dockerfile: Dockerfile
+    # By number, not the image's `bun` user, so it's guaranteed to match the
+    # token tmpfs's owner below.
+    user: "1000:1000"
     volumes:
       # Writable mounts of the shared domain lists so the approver can append
       # entries on behalf of the host-side extension (which cannot write WSL files
@@ -35,8 +38,11 @@ services:
       # surface — the host-published /decision port.
       APPROVER_TOKEN: ${APPROVER_TOKEN:-}
     # In-RAM mount for the generated token. Wiped on container stop; never on disk.
+    # Ownership is explicit because Docker's default differs on a restart: the
+    # first start gets a world-writable dir, a restart a root-only one, and the
+    # approver (unable to write its token) would crash-loop after any reboot.
     tmpfs:
-      - /run/approver
+      - /run/approver:uid=1000,gid=1000,mode=0700
     # Published to the host loopback so the host-side decider (VS Code extension;
     # host curl) can reach the decision endpoint. The approver sits on `external`
     # ONLY — deliberately NOT on proxy_net — so sandboxed app containers have no
