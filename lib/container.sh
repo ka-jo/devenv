@@ -211,6 +211,11 @@ _shared_seed_firewall() {
 }
 
 _shared_compose() {
+    # Default build attestations carry a timestamp, and with the containerd
+    # image store they're part of the image ID, so every `up --build` would yield
+    # a "new" image and recreate the running firewall and approver, cutting off
+    # every other worktree's proxied connections and pending approvals.
+    BUILDX_NO_DEFAULT_ATTESTATIONS=1 \
     SHARED_FIREWALL_DIR="$SHARED_FIREWALL_DIR" COMPOSE_PROJECT_NAME="$SHARED_PN" \
         docker compose -p "$SHARED_PN" -f "$REPO_DIR/devcontainer/infra/docker-compose.yml" "$@"
 }
