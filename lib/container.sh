@@ -238,13 +238,11 @@ _shared_is_healthy() {
 }
 
 _shared_wait_healthy() {
-    local status
     for _ in $(seq 1 30); do
-        status="$(docker inspect -f '{{.State.Health.Status}}' "${SHARED_PN}-firewall" 2>/dev/null || true)"
-        [[ "$status" == "healthy" ]] && return 0
+        _shared_is_healthy && return 0
         sleep 1
     done
-    echo "error: shared firewall (${SHARED_PN}-firewall) did not become healthy" >&2
+    echo "error: shared stack (${SHARED_PN}-firewall, ${SHARED_PN}-approver) did not become healthy; see: docker compose -p ${SHARED_PN} logs" >&2
     exit 1
 }
 
