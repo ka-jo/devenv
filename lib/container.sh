@@ -15,6 +15,12 @@ CONTAINER_CLAUDE_DIR="/.claude"
 # Also hardcoded in devcontainer/features/agent/install.sh and the dashboard
 # (CONTAINER_REPO_DIR in dashboard/src/state/sources/agents.ts).
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/devenv"
+# Per-worktree data that outlives containers: <project>/claude is mounted
+# read-write at CONTAINER_CLAUDE_DIR, so it's agent-writable — devenv only ever
+# seeds it (_container_seed_claude_data) and deletes it (_container_remove_data),
+# never reads or runs anything from it. Kept apart from STATE_DIR, which no
+# container may ever see.
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/devenv"
 DEVCONTAINER_CLI="$REPO_DIR/node_modules/.bin/devcontainer"
 # The config used for any worktree whose project doesn't define its own.
 DEFAULT_CONFIG="$REPO_DIR/devcontainer/devcontainer.json"
@@ -37,7 +43,8 @@ _compose_project_name() {
 # Sets globals: CT_REPO, CT_BRANCH, CT_PATH (worktree checkout path), CT_PN (compose
 # project name), CT_WORKDIR (CT_PATH's mirrored path inside the container),
 # CT_STATE (host-only generated files, outside every container's mounts),
-# CT_CONFIG (the generated devcontainer.json the CLI runs from)
+# CT_CONFIG (the generated devcontainer.json the CLI runs from),
+# CT_CLAUDE_DATA (host dir mounted at CONTAINER_CLAUDE_DIR)
 _container_resolve() {
     local repo="$1" branch="$2"
     if [[ -z "$repo" || -z "$branch" ]]; then
@@ -58,6 +65,7 @@ _container_resolve() {
     CT_WORKDIR="$CONTAINER_REPO_DIR/${CT_PATH#"$REPO_DIR/"}"
     CT_STATE="$STATE_DIR/$CT_PN"
     CT_CONFIG="$CT_STATE/.devcontainer/devcontainer.json"
+    CT_CLAUDE_DATA="$DATA_DIR/$CT_PN/claude"
 }
 
 # Opens VS Code attached to the running container for the worktree last
@@ -82,14 +90,18 @@ _open_vscode() {
 #   to the approver (decision authority) or the internet except through it.
 #   proxy_net is owned by the shared stack and referenced by fixed name; compose
 #   can't depends_on across projects, hence _shared_ensure_up/_shared_wait_healthy.
-# - Claude config: only the specific host ~/.claude entries the container needs
-#   (config + auth), not the whole directory. The rest — jobs/, projects/,
-#   sessions/, history.jsonl — is the background-agent session registry, and
-#   sharing it made every container list every other container's agents. Each
-#   container keeps its own copy in its filesystem layer instead.
-#   ~/.claude.json (preferences settings.json doesn't cover, plus UI state) is
-#   shared read-write with the host and every container — not a per-session
-#   registry, but concurrent writers can still clobber each other's updates.
+# - Claude config: CONTAINER_CLAUDE_DIR is this worktree's own data dir
+#   (CT_CLAUDE_DATA), so sessions, history and .claude.json survive rebuilds
+#   but are never shared — a shared session registry made every container list
+#   every other container's agents. From the host's own Claude config, only
+#   auth (read-write, for token refresh) and settings.json (read-only) are
+#   mounted on top. Everything else in ~/.claude and ~/.claude.json steers the
+#   HOST's Claude — settings hooks and mcpServers are commands it runs,
+#   skills/commands/rules/CLAUDE.md are instructions it follows — so a writable
+#   mount of any of it is a way out of the sandbox. The repo-tracked config is
+#   instead linked from the read-only /devenv by the agent Feature's
+#   postStartCommand (`devenv link`), and managed-settings.json is a link into
+#   /devenv.
 # - ~/devenv read-only, so the firewall allowlist and the compose/config files
 #   are out of a sandboxed process's reach, with worktrees/ masked by a
 #   read-only tmpfs: other repos' checkouts (uncommitted work, gitignored
@@ -121,11 +133,11 @@ _container_write_override() {
     jq -n \
         --arg host "$REPO_DIR" --arg ct "$CONTAINER_REPO_DIR" --arg claude "$CONTAINER_CLAUDE_DIR" \
         --arg home "$HOME" --arg pn "$CT_PN" --arg service "$service" --arg proxynet "$SHARED_PROXY_NET" \
-        --arg settings "$REPO_DIR/devcontainer/managed-settings.json" \
+        --arg claudedata "$CT_CLAUDE_DATA" \
         --arg wt "$CT_PATH" --arg bare "$bare" --arg admin "$admin" '
         def mount($target; $ro): {type: "bind", source: ., target: $target, read_only: $ro};
         def bind($ro): mount($ct + ltrimstr($host); $ro);
-        def claude($entry): ($home + "/.claude/" + $entry) | mount($claude + "/" + $entry; false);
+        def claude($entry; $ro): ($home + "/.claude/" + $entry) | mount($claude + "/" + $entry; $ro);
         {
             name: $pn,
             services: {($service): {
@@ -146,11 +158,9 @@ _container_write_override() {
                 volumes: ([
                     ($host | mount($ct; true)),
                     {type: "tmpfs", target: ($ct + "/worktrees"), read_only: true},
-                    claude("CLAUDE.md"), claude("rules"), claude("skills"), claude("agents"),
-                    claude("commands"), claude("output-styles"),
-                    claude(".credentials.json"), claude("settings.json"),
-                    ($home + "/.claude.json" | mount($claude + "/.claude.json"; false)),
-                    ($settings | mount("/etc/claude-code/managed-settings.json"; true)),
+                    ($claudedata | mount($claude; false)),
+                    claude(".credentials.json"; false),
+                    claude("settings.json"; true),
                     ($wt | bind(false)),
                     ($wt + "/.git" | bind(true)),
                     ($bare | bind(false)),
@@ -163,6 +173,27 @@ _container_write_override() {
             }},
             networks: {proxy_net: {external: true, name: $proxynet}}
         }' --args "${others[@]}" > "$CT_STATE/override.json"
+}
+
+# Creates the worktree's Claude data dir on first use, with a .claude.json that
+# skips Claude's first-run onboarding and pre-trusts the worktree — the sandbox,
+# not the trust prompt, is what contains it, and the prompt would otherwise
+# block background agents. Only written when missing: from then on the file is
+# Claude's (and agent-writable), so it's never read or overwritten here.
+_container_seed_claude_data() {
+    mkdir -p "$CT_CLAUDE_DATA"
+    [[ -e "$CT_CLAUDE_DATA/.claude.json" ]] && return 0
+    jq -n --arg ws "$CT_WORKDIR" \
+        '{hasCompletedOnboarding: true, projects: {($ws): {hasTrustDialogAccepted: true}}}' \
+        > "$CT_CLAUDE_DATA/.claude.json"
+}
+
+# Deletes a worktree's per-worktree data (session history included). Called by
+# `devenv worktree rm`; takes repo/branch so callers needn't resolve.
+_container_remove_data() {
+    local pn
+    pn="$(_compose_project_name "$1" "$2")"
+    rm -rf -- "${DATA_DIR:?}/${pn:?}"
 }
 
 # Runs a command in the resolved worktree's container as its remote user, in
@@ -324,6 +355,7 @@ _container_up() {
     _shared_wait_healthy
     _container_write_config
     _container_write_override
+    _container_seed_claude_data
     _container_ensure_volume shared-pnpm-store
     _container_ensure_volume ka-jo-zsh-history
 

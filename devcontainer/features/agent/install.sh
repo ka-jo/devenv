@@ -3,10 +3,8 @@
 # build time.
 set -euo pipefail
 
-# Fixed container paths, mirroring CONTAINER_REPO_DIR / CONTAINER_CLAUDE_DIR
-# in lib/container.sh.
+# Fixed container path, mirroring CONTAINER_REPO_DIR in lib/container.sh.
 DEVENV_DIR="/devenv"
-CLAUDE_CONFIG_DIR="/.claude"
 MIN_GIT_VERSION="2.48"
 
 # devenv creates worktrees with --relative-paths, which sets
@@ -36,13 +34,13 @@ user_home="$(getent passwd "$_REMOTE_USER" | cut -d: -f6)"
 # ~/.local/bin/claude, and this follows it.
 ln -sf "$user_home/.local/bin/claude" /usr/local/bin/claude
 
-# Claude writes sessions/projects/telemetry here at runtime. Docker would
-# otherwise create it root-owned, as the parent of the ~/.claude entry mounts.
-mkdir -p "$CLAUDE_CONFIG_DIR"
-chown "$_REMOTE_USER:" "$CLAUDE_CONFIG_DIR"
-
 # Dangling until the ~/devenv bind mount populates the target at runtime.
 ln -sf "$DEVENV_DIR/bin/devenv" /usr/local/bin/devenv
+
+# A link rather than a mount: always the repo's current policy, and read-only
+# through the /devenv mount.
+mkdir -p /etc/claude-code
+ln -sf "$DEVENV_DIR/devcontainer/managed-settings.json" /etc/claude-code/managed-settings.json
 
 # claude-wrapper attaches per-session proxy credentials (the approver's session
 # id) and then execs `claude` from PATH.

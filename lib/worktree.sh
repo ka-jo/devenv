@@ -62,6 +62,9 @@ cmd_worktree_rm() {
         | sort -rz | xargs -0 -r rmdir 2>/dev/null || true
     echo "removed: $path"
 
+    # Its container's Claude session history goes with it.
+    _container_remove_data "$repo" "$branch"
+
     # -d refuses to delete a branch not fully merged; --force upgrades to -D.
     git -C "$bare" branch "$([[ "$force" -eq 1 ]] && echo -D || echo -d)" "$branch"
     echo "deleted branch: $branch"
