@@ -92,8 +92,9 @@ services:
       start_period: 2s
 
 networks:
-  # Fixed names so per-worktree devcontainer/docker-compose.yml can reference
-  # proxy_net as an external network. Don't rename without updating both files.
+  # Fixed names so every worktree's generated override.yaml can reference
+  # proxy_net as an external network. Don't rename without updating SHARED_PROXY_NET
+  # in lib/container.sh.
   external:
     name: devenv-shared_external
     driver: bridge

@@ -26,7 +26,7 @@ DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/devenv"
 TRUST_DIR="$STATE_DIR/trust"
 DEVCONTAINER_CLI="$REPO_DIR/node_modules/.bin/devcontainer"
 # The config used for any worktree whose project doesn't define its own.
-DEFAULT_CONFIG="$REPO_DIR/devcontainer/devcontainer.json"
+DEFAULT_CONFIG="$REPO_DIR/devcontainer/default/devcontainer.json"
 # devenv's local Features. `agent` is injected into every generated config;
 # the rest are available to configs that reference them as ./features/<id>.
 DEVENV_FEATURES_DIR="$REPO_DIR/devcontainer/features"

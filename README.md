@@ -15,11 +15,12 @@ claude/                       # global Claude Code config — symlinked into ~/.
   agents/                     #   custom subagents
   commands/                   #   custom slash commands
   output-styles/              #   custom output styles
-devcontainer/                 # dev container base — referenced directly by `devenv container`, never copied
-  docker-compose.yml          #   the app service only, joins the shared proxy_net (below) as its sole network
-  devcontainer.json           #   default config: Features (common-utils, ./features/fnm) on top of the Dockerfile
-  Dockerfile                  #   Ubuntu 26.04 base, minus its stock UID-1000 user
-  features/fnm/               #   local Feature: pinned, checksum-verified fnm + standalone pnpm
+devcontainer/                 # dev container infrastructure — referenced directly by `devenv container`, never copied
+  default/                    #   devenv's default config, used when a worktree has none of its own
+    devcontainer.json         #     Features (common-utils, ./features/fnm) on top of the Dockerfile
+    docker-compose.yml        #     the app service only; devenv's agent layer is generated per worktree
+    Dockerfile                #     Ubuntu 26.04 base, minus its stock UID-1000 user
+    features/fnm/             #     local Feature: pinned, checksum-verified fnm + standalone pnpm
   features/agent/             #   local Feature injected into every container: Claude Code, claude-wrapper alias, git >= 2.48 gate
   generator/                  #   TypeScript (Bun) package that generates each worktree's config + compose override
   infra/                      #   Squid firewall + egress approver — ONE shared instance for all worktrees

@@ -45,7 +45,7 @@ export function createHostFixture(): HostFixture {
       containerRepoDir: "/devenv",
       containerClaudeDir: "/.claude",
       proxyNetwork: "devenv-shared_proxy_net",
-      defaultConfig: path.join(repoDir, "devcontainer", "devcontainer.json"),
+      defaultConfig: path.join(repoDir, "devcontainer", "default", "devcontainer.json"),
       featuresDir: path.join(repoDir, "devcontainer", "features"),
       devcontainerCli: "/unused",
       trustDir: path.join(root, "state", "trust"),

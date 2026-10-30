@@ -15,7 +15,7 @@ const complete = {
   containerRepoDir: "/devenv",
   containerClaudeDir: "/.claude",
   proxyNetwork: "devenv-shared_proxy_net",
-  defaultConfig: "/home/u/devenv/devcontainer/devcontainer.json",
+  defaultConfig: "/home/u/devenv/devcontainer/default/devcontainer.json",
   featuresDir: "/home/u/devenv/devcontainer/features",
   devcontainerCli: "/home/u/devenv/node_modules/.bin/devcontainer",
   trustDir: "/home/u/.local/state/devenv/trust",
