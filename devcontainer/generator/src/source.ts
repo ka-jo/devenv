@@ -10,10 +10,10 @@ export interface SourceConfig {
   /** Directory its relative paths (compose files, local Features) resolve against. */
   readonly configDir: string;
   /**
-   * Whether it's devenv's own default config — trusted as-is, since it lives in the read-only `~/devenv` — rather than
-   * a project's, which lives in the agent-writable worktree.
+   * The folder the config belongs to: the one holding its `.devcontainer/` folder, otherwise
+   * {@link SourceConfig.configDir}. Approved file paths are relative to it, and host paths inside it aren't flagged.
    */
-  readonly isDefault: boolean;
+  readonly rootDir: string;
 }
 
 /**
@@ -26,11 +26,7 @@ export interface SourceConfig {
  * picking explicitly.
  */
 export function resolveSourceConfig(context: GeneratorContext): SourceConfig {
-  const defaultConfig: SourceConfig = {
-    configPath: context.defaultConfig,
-    configDir: path.dirname(context.defaultConfig),
-    isDefault: true,
-  };
+  const defaultConfig = sourceConfigAt(context.defaultConfig);
   if (context.shouldForceDefault) {
     return defaultConfig;
   }
@@ -38,7 +34,7 @@ export function resolveSourceConfig(context: GeneratorContext): SourceConfig {
   const folderDir = path.join(context.worktreePath, ".devcontainer");
   for (const candidate of [path.join(folderDir, "devcontainer.json"), path.join(context.worktreePath, ".devcontainer.json")]) {
     if (existsSync(candidate)) {
-      return { configPath: candidate, configDir: path.dirname(candidate), isDefault: false };
+      return sourceConfigAt(candidate);
     }
   }
 
@@ -55,4 +51,14 @@ export function resolveSourceConfig(context: GeneratorContext): SourceConfig {
     );
   }
   return defaultConfig;
+}
+
+/** Describes the config at a path. */
+function sourceConfigAt(configPath: string): SourceConfig {
+  const configDir = path.dirname(configPath);
+  return {
+    configPath,
+    configDir,
+    rootDir: path.basename(configDir) === ".devcontainer" ? path.dirname(configDir) : configDir,
+  };
 }

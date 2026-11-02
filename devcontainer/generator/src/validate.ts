@@ -1,10 +1,11 @@
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { parse } from "yaml";
 import type { ComposeModel, ComposeService } from "./compose.ts";
 import type { DevcontainerConfig } from "./config.ts";
+import { isPathInside } from "./paths.ts";
 
-/** Why a project config can't be used as-is: one rule broken in one place. */
+/** One sandbox rule a config breaks, or one way it may expose the host, in one place. */
 export interface Violation {
   /** Stable rule id; also the anchor of its explanation in docs/agent-container-security.md. */
   readonly rule: ViolationRule;
@@ -14,7 +15,7 @@ export interface Violation {
   readonly detail: string;
 }
 
-/** The rules a project config is checked against. */
+/** The rules a config is checked against. */
 export type ViolationRule =
   | "privileged"
   | "host-namespaces"
@@ -27,23 +28,33 @@ export type ViolationRule =
   | "volume-driver-opts"
   | "external-networks"
   | "build-network"
-  | "compose-includes";
+  | "compose-includes"
+  | "config-folder";
 
-/** What a project config is validated against. */
+/** What a config is validated against. */
 export interface ValidationInput {
-  /** The project's normalized compose model, without devenv's override. */
+  /** The config's normalized compose model, without devenv's override. */
   readonly model: ComposeModel;
   /** The dev container's primary service. */
   readonly primaryService: string;
   /** The dev container config as written (without what its Features or base image contribute). */
   readonly devcontainerConfig: DevcontainerConfig;
-  /** Absolute paths of the project's compose files. */
+  /** Absolute paths of the config's compose files. */
   readonly composeFiles: readonly string[];
-  /** The project's compose files as written, for what normalization hides. */
+  /** The config's compose files as written, for what normalization hides. */
   readonly rawComposeFiles: readonly { readonly path: string; readonly text: string }[];
-  /** Host path of the worktree; every host path a config uses must resolve inside it. */
-  readonly worktreePath: string;
+  /** Host directories a config may use paths inside without a `host-paths` warning: the worktree and the config's own folder. */
+  readonly allowedRoots: readonly string[];
 }
+
+// Rules that only expose host files to the container, which approval can accept. Every other rule is a way out of
+// the sandbox (host privileges, namespaces, devices, the Docker daemon, around the egress proxy) or out of what
+// approval covers, and no approval can accept it.
+const HOST_EXPOSURE_RULES: ReadonlySet<ViolationRule> = new Set(["host-paths", "volume-driver-opts", "config-folder"]);
+
+// Directories whose presence in a config's folder means it holds credentials, which approval would then cover and
+// bind mounts could expose without a host-paths warning.
+const SECRET_DIRS = [".ssh", ".aws", ".gnupg", ".kube", ".docker"] as const;
 
 // Capabilities that are known container-escape or host-impact routes.
 const DANGEROUS_CAPABILITIES: ReadonlySet<string> = new Set([
@@ -62,57 +73,89 @@ const HOST_NAMESPACE_KEYS = ["pid", "ipc", "uts", "userns_mode", "cgroup"] as co
 const SOCKET_NAMES: ReadonlySet<string> = new Set(["docker.sock", "containerd.sock", "podman.sock", "buildkitd.sock"]);
 
 /**
- * Checks a project config for anything that would weaken devenv's sandbox: access to the host (privileges,
- * namespaces, devices, host paths, the Docker daemon) or a way around the egress proxy.
+ * Whether a rule is a way out of the sandbox, which blocks a config outright, rather than host files exposed to the
+ * container, which is only a warning.
  *
- * @param input - The project config, as compose and the devcontainer CLI resolve it.
- * @returns Every violation found, in a stable order; empty when the config is acceptable.
+ * @param rule - The rule broken.
+ * @returns `true` when no approval can accept it.
+ */
+export function isSandboxEscape(rule: ViolationRule): boolean {
+  return !HOST_EXPOSURE_RULES.has(rule);
+}
+
+/**
+ * Checks a config for anything that would weaken devenv's sandbox: access to the host (privileges, namespaces,
+ * devices, host paths, the Docker daemon) or a way around the egress proxy.
+ *
+ * @param input - The config, as compose and the devcontainer CLI resolve it.
+ * @returns Every violation found, in a stable order; empty when the config is acceptable. Split them with
+ * {@link isSandboxEscape}.
  */
 export function validateProjectConfig(input: ValidationInput): Violation[] {
-  const worktree = resolveReal(input.worktreePath);
+  const roots = input.allowedRoots.map(resolveReal);
   const violations: Violation[] = [];
   const add = (rule: ViolationRule, location: string, detail: string): void => {
     violations.push({ rule, location, detail });
   };
 
   for (const file of input.composeFiles) {
-    checkHostPath("dev container config", `compose file ${file}`, file, worktree, add);
+    checkHostPath("dev container config", `compose file ${file}`, file, roots, add);
   }
   for (const [name, service] of Object.entries(input.model.services)) {
-    checkService(`service ${name}`, service, name === input.primaryService, worktree, add);
+    checkService(`service ${name}`, service, name === input.primaryService, roots, add);
   }
-  checkTopLevel(input.model, worktree, add);
-  checkDevcontainerConfig(input.devcontainerConfig, worktree, add, "dev container config");
+  checkTopLevel(input.model, roots, add);
+  checkDevcontainerConfig(input.devcontainerConfig, roots, add, "dev container config");
   checkRawComposeFiles(input.rawComposeFiles, add);
   return violations;
 }
 
 /**
  * Checks what a config's Features and its base image's devcontainer.metadata label add to it, as
- * `read-configuration --include-merged-configuration` reports them — before anything is built. Run after
- * {@link validateProjectConfig} passes: resolving them makes the devcontainer CLI read the config's Dockerfiles, which
- * must first be confirmed to be inside the worktree.
+ * `read-configuration --include-merged-configuration` reports them — before anything is built. Run only once
+ * {@link validateProjectConfig} finds no sandbox escape: resolving them makes the devcontainer CLI read the config's
+ * Dockerfiles and pull its base image.
  *
  * @param merged - The merged config.
- * @param worktreePath - Host path of the worktree; bind mounts must resolve inside it.
+ * @param allowedRoots - Host directories bind mounts may use without a `host-paths` warning.
  * @returns Every violation found; empty when acceptable.
  *
  * @remarks
  * A LABEL in the project's own Dockerfile needs no check: the CLI ignores it, stamping the final image's label from
  * the base image, Features, and config.
  */
-export function validateMergedConfig(merged: DevcontainerConfig, worktreePath: string): Violation[] {
+export function validateMergedConfig(merged: DevcontainerConfig, allowedRoots: readonly string[]): Violation[] {
   const violations: Violation[] = [];
-  checkDevcontainerConfig(merged, resolveReal(worktreePath), (rule, location, detail) => {
+  checkDevcontainerConfig(merged, allowedRoots.map(resolveReal), (rule, location, detail) => {
     violations.push({ rule, location, detail });
   }, "Features / base image metadata");
   return violations;
 }
 
+/**
+ * Checks the folder a config belongs to, all of which approval covers and the config may bind-mount from without a
+ * `host-paths` warning, for holding far more than a config: the home directory (or an ancestor of it), or credentials.
+ *
+ * @param rootDir - The config's folder.
+ * @param home - The host user's home directory.
+ * @returns A `config-folder` violation per finding; empty when it looks like an ordinary folder.
+ */
+export function validateConfigFolder(rootDir: string, home: string): Violation[] {
+  const root = resolveReal(rootDir);
+  if (isPathInside(resolveReal(home), root)) {
+    return [{ rule: "config-folder", location: rootDir, detail: "the config's folder contains the home directory" }];
+  }
+  return SECRET_DIRS.filter((dir) => existsSync(path.join(root, dir))).map((dir) => ({
+    rule: "config-folder",
+    location: rootDir,
+    detail: `the config's folder holds ${dir}`,
+  }));
+}
+
 type AddViolation = (rule: ViolationRule, location: string, detail: string) => void;
 
 /** Checks one compose service's own settings; the primary is held to a stricter network rule. */
-function checkService(location: string, service: ComposeService, isPrimary: boolean, worktree: string, add: AddViolation): void {
+function checkService(location: string, service: ComposeService, isPrimary: boolean, roots: readonly string[], add: AddViolation): void {
   if (service.privileged === true) {
     add("privileged", location, "privileged: true");
   }
@@ -133,20 +176,20 @@ function checkService(location: string, service: ComposeService, isPrimary: bool
   }
   for (const volume of service.volumes ?? []) {
     if (volume.type === "bind" && volume.source !== undefined) {
-      checkHostPath(location, `bind mount ${volume.source} -> ${volume.target}`, volume.source, worktree, add);
+      checkHostPath(location, `bind mount ${volume.source} -> ${volume.target}`, volume.source, roots, add);
     }
   }
   for (const envFile of service.env_file ?? []) {
-    checkHostPath(location, `env_file ${envFile.path}`, envFile.path, worktree, add);
+    checkHostPath(location, `env_file ${envFile.path}`, envFile.path, roots, add);
   }
   if (service.build?.network === "host") {
     add("build-network", location, "build.network: host");
   }
   if (service.build?.context !== undefined) {
-    checkHostPath(location, `build context ${service.build.context}`, service.build.context, worktree, add);
+    checkHostPath(location, `build context ${service.build.context}`, service.build.context, roots, add);
     if (service.build.dockerfile !== undefined) {
       const dockerfile = path.resolve(service.build.context, service.build.dockerfile);
-      checkHostPath(location, `dockerfile ${dockerfile}`, dockerfile, worktree, add);
+      checkHostPath(location, `dockerfile ${dockerfile}`, dockerfile, roots, add);
     }
   }
 }
@@ -186,22 +229,23 @@ function checkSecurityOpt(location: string, option: string, add: AddViolation): 
 }
 
 /**
- * Flags a host path outside the worktree, or a container runtime socket anywhere. Compared after resolving
- * symlinks, so a link inside the worktree pointing out of it is caught; a path that doesn't exist yet is checked as
+ * Flags a host path outside every allowed root, or a container runtime socket anywhere. Compared after resolving
+ * symlinks, so a link inside a root pointing out of it is caught; a path that doesn't exist yet is checked as
  * written, since Docker would create it there.
  */
-function checkHostPath(location: string, description: string, hostPath: string, worktree: string, add: AddViolation): void {
+function checkHostPath(location: string, description: string, hostPath: string, roots: readonly string[], add: AddViolation): void {
   if (SOCKET_NAMES.has(path.basename(hostPath))) {
     add("docker-socket", location, description);
     return;
   }
-  if (!isInside(resolveReal(hostPath), worktree)) {
-    add("host-paths", location, `${description} is outside the worktree`);
+  const resolved = resolveReal(hostPath);
+  if (!roots.some((root) => isPathInside(resolved, root))) {
+    add("host-paths", location, `${description} is outside the worktree and the config's folder`);
   }
 }
 
 /** Checks the project's top-level networks, volumes, secrets and configs that some service uses. */
-function checkTopLevel(model: ComposeModel, worktree: string, add: AddViolation): void {
+function checkTopLevel(model: ComposeModel, roots: readonly string[], add: AddViolation): void {
   for (const [name, network] of Object.entries(model.networks ?? {})) {
     if (network.external === true) {
       add("external-networks", `network ${name}`, "external: true");
@@ -218,14 +262,14 @@ function checkTopLevel(model: ComposeModel, worktree: string, add: AddViolation)
   ] as const) {
     for (const [name, reference] of Object.entries(entries ?? {})) {
       if (reference.file !== undefined) {
-        checkHostPath(`${kind} ${name}`, `file ${reference.file}`, reference.file, worktree, add);
+        checkHostPath(`${kind} ${name}`, `file ${reference.file}`, reference.file, roots, add);
       }
     }
   }
 }
 
 /** Checks devcontainer.json-level settings: privileged, capAdd, securityOpt, and bind mounts. */
-function checkDevcontainerConfig(merged: DevcontainerConfig, worktree: string, add: AddViolation, location: string): void {
+function checkDevcontainerConfig(merged: DevcontainerConfig, roots: readonly string[], add: AddViolation, location: string): void {
   if (merged.privileged === true) {
     add("privileged", location, "privileged: true");
   }
@@ -238,12 +282,12 @@ function checkDevcontainerConfig(merged: DevcontainerConfig, worktree: string, a
   for (const mount of Array.isArray(merged.mounts) ? merged.mounts : []) {
     const { type, source } = parseDevcontainerMount(mount);
     if (type === "bind" && source !== undefined) {
-      checkHostPath(location, `mount ${source}`, source, worktree, add);
+      checkHostPath(location, `mount ${source}`, source, roots, add);
     }
   }
 }
 
-/** Flags `include:` and `extends: file:` — normalization inlines those files, so they'd escape the trust snapshot. */
+/** Flags `include:` and `extends: file:` — normalization inlines those files, so they'd escape what approval covers. */
 function checkRawComposeFiles(files: readonly { readonly path: string; readonly text: string }[], add: AddViolation): void {
   for (const file of files) {
     const document: unknown = parse(file.text);
@@ -297,10 +341,4 @@ function resolveReal(hostPath: string): string {
   } catch {
     return path.resolve(hostPath);
   }
-}
-
-/** Whether a path is the root or anywhere beneath it. */
-function isInside(candidate: string, root: string): boolean {
-  const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }

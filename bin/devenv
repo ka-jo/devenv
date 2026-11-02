@@ -33,7 +33,7 @@ case "${1:-}" in
         echo "  container down [<repo> <branch>]           stop a worktree's dev container stack (fzf picker if omitted)"
         echo "  container attach [<repo> <branch>] [--code] exec a zsh shell in a running dev container (fzf picker if omitted; --code opens VS Code instead of a shell)"
         echo "  container list                  list running devenv-managed containers"
-        echo "  container trust [<repo> <branch>]          review a project's .devcontainer config (diff vs. last approved) and approve it for every worktree of the repo"
+        echo "  container trust [<repo> <branch>]          review a worktree's dev container config (diff vs. its last approved version) and approve exactly that content everywhere"
         echo "  agent up [<repo> <branch>] [name] [-- claude-args...]  start a background claude agent in a worktree container (starts the container if needed)"
         echo "  agent attach <repo> <branch> [name] [--id=<id>]  attach to a background agent (fzf picker if name omitted/ambiguous; --id skips resolution entirely)"
         echo "  agent rm <repo> <branch> [name]            remove a background agent from claude's session list (fzf picker if name omitted/ambiguous)"

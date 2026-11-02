@@ -1,32 +1,44 @@
-import { readFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { type ComposeModel, loadComposeModel } from "./compose.ts";
-import { type DerivedConfig, deriveGeneratedConfig, readSourceConfig, type ResolvedSourceConfig } from "./config.ts";
+import {
+  DEVENV_FEATURES_SUBDIR,
+  type DerivedConfig,
+  deriveGeneratedConfig,
+  type GeneratedConfig,
+  localFeaturePaths,
+  readSourceConfig,
+  type ResolvedSourceConfig,
+} from "./config.ts";
 import type { GeneratorContext } from "./context.ts";
 import { containerPathOf } from "./paths.ts";
 import { resolveSourceConfig, type SourceConfig } from "./source.ts";
-import { collectConfigSet, type ConfigSet } from "./trust.ts";
-import { type Violation, validateMergedConfig, validateProjectConfig } from "./validate.ts";
+import { collectConfigSet, configNameOf, type ConfigSet } from "./trust.ts";
+import { isSandboxEscape, type Violation, validateConfigFolder, validateMergedConfig, validateProjectConfig } from "./validate.ts";
 
-/** A worktree's config, fully resolved and — when it's a project's — checked. */
+/** A worktree's config, fully resolved and checked. */
 export interface LoadedConfig {
   /** Which config it is. */
   readonly source: SourceConfig;
+  /** Its name, for finding its previous approval. */
+  readonly name: string;
   /** The config as the devcontainer CLI resolves it. */
   readonly resolved: ResolvedSourceConfig;
   /** The config the CLI will run from. */
   readonly derived: DerivedConfig;
   /** Its normalized compose model, without devenv's override. */
   readonly model: ComposeModel;
-  /** A project config's sandbox-rule violations; always empty for the default config. */
+  /** Ways out of the sandbox it opens; any one blocks it. */
   readonly violations: readonly Violation[];
+  /** Ways it may expose host files to the container, for whoever approves or runs it to weigh. */
+  readonly warnings: readonly Violation[];
   /**
-   * Whether what Features and the base image add was checked too. It's only resolved once the config itself passes,
-   * so it's `false` when {@link LoadedConfig.violations} are from the config itself.
+   * Whether what Features and the base image add was checked too. It's only resolved once the config itself opens no
+   * way out of the sandbox, so it's `false` when {@link LoadedConfig.violations} are from the config itself.
    */
   readonly isMergedChecked: boolean;
-  /** A project config's files, for approval; `undefined` for the default config, which needs none. */
-  readonly configSet: ConfigSet | undefined;
+  /** Its files, for approval. */
+  readonly configSet: ConfigSet;
 }
 
 /** Where the generator writes the compose override for a worktree. */
@@ -35,73 +47,127 @@ export function overridePathOf(context: GeneratorContext): string {
 }
 
 /**
- * Resolves a worktree's config and, when it's a project's, validates it and reads the files approval covers.
+ * Where a staging directory's generated `devcontainer.json` and the local Features it uses live.
+ *
+ * @param stageDir - The directory passed to {@link loadWorktreeConfig}.
+ * @returns `<stageDir>/.devcontainer`.
+ */
+export function generatedDirOf(stageDir: string): string {
+  return path.join(stageDir, ".devcontainer");
+}
+
+/**
+ * Resolves a worktree's config, validates it, and reads the files approval covers.
  *
  * @param context - The worktree and host description.
+ * @param stageDir - A host-only directory to stage the generated `.devcontainer/` in (see {@link generatedDirOf}),
+ * which resolving what Features add requires. Its `.devcontainer/` is replaced.
  * @returns Everything needed to generate from the config or to review it.
  * @throws {@link GeneratorError} when the config can't be read or isn't compose-based.
+ *
+ * @remarks
+ * The staged `devcontainer.json` lacks devenv's compose override, which the caller adds once it's written.
  */
-export async function loadWorktreeConfig(context: GeneratorContext): Promise<LoadedConfig> {
+export async function loadWorktreeConfig(context: GeneratorContext, stageDir: string): Promise<LoadedConfig> {
   const source = resolveSourceConfig(context);
-  const resolved = await readSourceConfig(context, source.configPath, false);
+  const resolved = await readSourceConfig(context, context.worktreePath, source.configPath, false);
   const derived = deriveGeneratedConfig(resolved.configuration, {
     sourceDir: source.configDir,
     overridePath: overridePathOf(context),
     workspaceFolder: containerPathOf(context, context.worktreePath),
-    isDefault: source.isDefault,
   });
   const model = await loadComposeModel(derived.composeFiles);
-  if (source.isDefault) {
-    return { source, resolved, derived, model, violations: [], isMergedChecked: true, configSet: undefined };
+  const configSet = collectConfigSet(source, resolved.configuration, derived.composeFiles, model, context.home);
+  const allowedRoots = [context.worktreePath, source.rootDir];
+  const found = [
+    ...validateConfigFolder(source.rootDir, context.home),
+    ...validateProjectConfig({
+      model,
+      primaryService: derived.config.service,
+      devcontainerConfig: resolved.configuration,
+      composeFiles: derived.composeFiles,
+      rawComposeFiles: derived.composeFiles.map((file) => ({ path: file, text: readFileSync(file, "utf8") })),
+      allowedRoots,
+    }),
+  ];
+  stageGeneratedConfig(context, source, resolved, { ...derived.config, dockerComposeFile: derived.composeFiles }, stageDir);
+  const loaded = { source, name: configNameOf(context, source), derived, model, configSet };
+  if (found.some((violation) => isSandboxEscape(violation.rule))) {
+    return { ...loaded, resolved, ...splitViolations(found), isMergedChecked: false };
   }
 
-  const configSet = collectConfigSet(context.worktreePath, source, derived.composeFiles, model);
-  const violations = validateProjectConfig({
-    model,
-    primaryService: derived.config.service,
-    devcontainerConfig: resolved.configuration,
-    composeFiles: derived.composeFiles,
-    rawComposeFiles: derived.composeFiles.map((file) => ({ path: file, text: readFileSync(file, "utf8") })),
-    worktreePath: context.worktreePath,
-  });
-  if (violations.length > 0) {
-    return { source, resolved, derived, model, violations, isMergedChecked: false, configSet };
-  }
-  // Only now: resolving Features and the base image makes the CLI read the config's Dockerfiles, which the first pass
-  // confirmed are inside the worktree.
-  const merged = await readSourceConfig(context, source.configPath, true);
+  // Only now: resolving Features and the base image makes the CLI read the config's Dockerfiles and pull its base
+  // image. It reads the staged copy, since it only resolves local Features under <workspace-folder>/.devcontainer/.
+  const staged = await readSourceConfig(context, stageDir, path.join(generatedDirOf(stageDir), "devcontainer.json"), true);
   return {
-    source,
-    resolved: merged,
-    derived,
-    model,
-    violations: validateMergedConfig(merged.merged, context.worktreePath),
+    ...loaded,
+    resolved: { configuration: resolved.configuration, merged: staged.merged },
+    ...splitViolations([...found, ...validateMergedConfig(staged.merged, allowedRoots)]),
     isMergedChecked: true,
-    configSet,
   };
 }
 
 /**
- * Formats violations as user-facing lines, ending with where to read about them and how to fall back.
- *
- * @param violations - The violations to report.
- * @param context - Supplies the repo and branch for the fallback command.
- * @param isMergedChecked - Whether what Features and the base image add was checked; when not, says so.
- * @returns The lines; empty when there are no violations.
+ * Writes a generated config into a staging directory's `.devcontainer/`, beside copies of the config's own local
+ * Features and a link to devenv's.
  */
-export function formatViolations(
-  violations: readonly Violation[],
+function stageGeneratedConfig(
   context: GeneratorContext,
-  isMergedChecked: boolean,
-): string[] {
+  source: SourceConfig,
+  resolved: ResolvedSourceConfig,
+  config: GeneratedConfig,
+  stageDir: string,
+): void {
+  const devcontainerDir = generatedDirOf(stageDir);
+  rmSync(devcontainerDir, { recursive: true, force: true });
+  mkdirSync(devcontainerDir, { recursive: true });
+  writeFileSync(path.join(devcontainerDir, "devcontainer.json"), `${JSON.stringify(config, null, 2)}\n`);
+  // The CLI resolves local Features ("./<path>") relative to the config file and only accepts them under
+  // <workspace-folder>/.devcontainer/, so the config's own are copied beside it at the same relative paths, and
+  // devenv's linked in as their own subdir. That check is on the path as written, so the link passes it. The config's
+  // are copied rather than linked: a link could point back into the agent-writable worktree.
+  for (const feature of localFeaturePaths(resolved.configuration)) {
+    cpSync(path.join(source.configDir, feature), path.join(devcontainerDir, feature), { recursive: true });
+  }
+  symlinkSync(context.featuresDir, path.join(devcontainerDir, DEVENV_FEATURES_SUBDIR));
+}
+
+function splitViolations(found: readonly Violation[]): Pick<LoadedConfig, "violations" | "warnings"> {
+  return {
+    violations: found.filter((violation) => isSandboxEscape(violation.rule)),
+    warnings: found.filter((violation) => !isSandboxEscape(violation.rule)),
+  };
+}
+
+/**
+ * Formats sandbox escapes as user-facing lines, ending with where to read about them.
+ *
+ * @param violations - The escapes to report.
+ * @param isMergedChecked - Whether what Features and the base image add was checked; when not, says so.
+ * @returns The lines; empty when there are none.
+ */
+export function formatViolations(violations: readonly Violation[], isMergedChecked: boolean): string[] {
   if (violations.length === 0) {
     return [];
   }
   return [
-    "the project's dev container config breaks devenv's sandbox rules:",
-    ...violations.map((violation) => `  - ${violation.location}: ${violation.detail} [${violation.rule}]`),
+    "the dev container config breaks devenv's sandbox rules:",
+    ...violations.map(formatViolation),
     ...(isMergedChecked ? [] : ["  (what its Features and base image add is checked once these are fixed)"]),
-    "  see docs/agent-container-security.md (sections named by the [rule]), or use devenv's default config instead: " +
-      `devenv container up ${context.repo} ${context.branch} --default`,
+    "  see docs/agent-container-security.md (sections named by the [rule])",
   ];
+}
+
+function formatViolation(violation: Violation): string {
+  return `  - ${violation.location}: ${violation.detail} [${violation.rule}]`;
+}
+
+/**
+ * Formats host-exposure warnings as user-facing lines, one per warning.
+ *
+ * @param warnings - The warnings to report.
+ * @returns The lines; empty when there are none.
+ */
+export function formatWarnings(warnings: readonly Violation[]): string[] {
+  return warnings.map((warning) => `${warning.location}: ${warning.detail} [${warning.rule}]`);
 }

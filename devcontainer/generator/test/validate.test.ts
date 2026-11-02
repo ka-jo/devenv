@@ -1,9 +1,17 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ComposeModel, ComposeService } from "../src/compose.ts";
 import type { DevcontainerConfig } from "../src/config.ts";
-import { type ValidationInput, validateMergedConfig, validateProjectConfig, type ViolationRule } from "../src/validate.ts";
+import {
+  isSandboxEscape,
+  type ValidationInput,
+  validateConfigFolder,
+  validateMergedConfig,
+  validateProjectConfig,
+  type ViolationRule,
+} from "../src/validate.ts";
 import { createHostFixture, type HostFixture } from "./fixtures.ts";
 
 let fixture: HostFixture;
@@ -26,7 +34,7 @@ function input(overrides: Partial<ValidationInput> & { services?: Record<string,
     devcontainerConfig: {},
     composeFiles: [path.join(worktree, ".devcontainer", "compose.yml")],
     rawComposeFiles: [],
-    worktreePath: worktree,
+    allowedRoots: [worktree],
     ...overrides,
   };
 }
@@ -69,7 +77,7 @@ describe("validateProjectConfig: services (primary and sidecars alike)", () => {
     ["env_file outside the worktree", { env_file: [{ path: "/home/u/.secrets" }] }, "host-paths"],
     ["build context outside the worktree", { build: { context: "/home/u" } }, "host-paths"],
     ["build network host", { build: { context: "WORKTREE", network: "host" } }, "build-network"],
-  ])("rejects a sidecar with %s", (_, service, rule) => {
+  ])("flags a sidecar with %s", (_, service, rule) => {
     const resolved = JSON.parse(
       JSON.stringify(service).replaceAll("SNEAKY", path.join(worktree, "sneaky-link")).replaceAll("WORKTREE", worktree),
     );
@@ -82,7 +90,7 @@ describe("validateProjectConfig: services (primary and sidecars alike)", () => {
     expect(rulesOf(input({ services: { app: {}, db: { network_mode: "container:abc" } } }))).toEqual(["network-mode"]);
   });
 
-  test("rejects a Dockerfile outside the worktree even with the context inside it", () => {
+  test("flags a Dockerfile outside the worktree even with the context inside it", () => {
     expect(rulesOf(input({ services: { app: { build: { context: worktree, dockerfile: "../../../../Dockerfile" } } } }))).toEqual([
       "host-paths",
     ]);
@@ -90,7 +98,7 @@ describe("validateProjectConfig: services (primary and sidecars alike)", () => {
 });
 
 describe("validateProjectConfig: top level", () => {
-  test("rejects external networks, host-binding volume driver_opts, and secret/config files outside the worktree", () => {
+  test("flags external networks, host-binding volume driver_opts, and secret/config files outside the worktree", () => {
     const model: ComposeModel = {
       services: { app: {} },
       networks: { shared: { external: true } },
@@ -101,11 +109,14 @@ describe("validateProjectConfig: top level", () => {
     expect(rulesOf(input({ model }))).toEqual(["external-networks", "volume-driver-opts", "host-paths"]);
   });
 
-  test("rejects compose files outside the worktree", () => {
+  test("flags compose files outside every allowed root, and accepts them inside any", () => {
     expect(rulesOf(input({ composeFiles: ["/home/u/elsewhere/compose.yml"] }))).toEqual(["host-paths"]);
+    expect(
+      rulesOf(input({ composeFiles: ["/home/u/elsewhere/compose.yml"], allowedRoots: [worktree, "/home/u/elsewhere"] })),
+    ).toEqual([]);
   });
 
-  test("rejects include: and extends: file, whose files would escape approval", () => {
+  test("flags include: and extends: file, whose files would escape approval", () => {
     const rawComposeFiles = [
       { path: "a.yml", text: "include: [other.yml]\nservices: {}\n" },
       { path: "b.yml", text: "services:\n  app:\n    extends: { file: base.yml, service: app }\n  ok:\n    extends: app\n" },
@@ -121,7 +132,7 @@ describe("validateProjectConfig: the dev container config as written", () => {
     ["securityOpt", { securityOpt: ["seccomp=unconfined"] }, "security-opt"],
     ["a string mount outside the worktree", { mounts: ["type=bind,source=/etc,target=/etc-host"] }, "host-paths"],
     ["an object mount outside the worktree", { mounts: [{ type: "bind", source: "/etc", target: "/x" }] }, "host-paths"],
-  ])("rejects %s", (_, devcontainerConfig, rule) => {
+  ])("flags %s", (_, devcontainerConfig, rule) => {
     expect(rulesOf(input({ devcontainerConfig }))).toEqual([rule]);
   });
 
@@ -132,9 +143,47 @@ describe("validateProjectConfig: the dev container config as written", () => {
 });
 
 describe("validateMergedConfig", () => {
-  test("rejects what Features or the base image add, e.g. docker-in-docker's privileged", () => {
-    const violations = validateMergedConfig({ privileged: true, mounts: ["type=volume,source=dind,target=/var/lib/docker"] }, worktree);
+  test("flags what Features or the base image add, e.g. docker-in-docker's privileged", () => {
+    const violations = validateMergedConfig({ privileged: true, mounts: ["type=volume,source=dind,target=/var/lib/docker"] }, [worktree]);
     expect(violations.map((violation) => violation.rule)).toEqual(["privileged"]);
     expect(violations[0]?.location).toBe("Features / base image metadata");
+  });
+});
+
+describe("isSandboxEscape", () => {
+  test("only host exposure is approvable", () => {
+    expect(isSandboxEscape("host-paths")).toBe(false);
+    expect(isSandboxEscape("volume-driver-opts")).toBe(false);
+    expect(isSandboxEscape("config-folder")).toBe(false);
+    for (const rule of ["privileged", "docker-socket", "network-mode", "external-networks", "compose-includes"] as const) {
+      expect(isSandboxEscape(rule)).toBe(true);
+    }
+  });
+});
+
+describe("validateConfigFolder", () => {
+  let home: string;
+
+  beforeAll(() => {
+    home = mkdtempSync(path.join(tmpdir(), "devenv-home-"));
+    mkdirSync(path.join(home, "configs", "plain"), { recursive: true });
+    mkdirSync(path.join(home, "configs", "keys", ".ssh"), { recursive: true });
+  });
+
+  afterAll(() => rmSync(home, { recursive: true, force: true }));
+
+  test("accepts an ordinary folder", () => {
+    expect(validateConfigFolder(path.join(home, "configs", "plain"), home)).toEqual([]);
+  });
+
+  test("flags the home directory and its ancestors", () => {
+    expect(validateConfigFolder(home, home).map((violation) => violation.rule)).toEqual(["config-folder"]);
+    expect(validateConfigFolder(path.dirname(home), home).map((violation) => violation.rule)).toEqual(["config-folder"]);
+  });
+
+  test("flags a folder holding credentials", () => {
+    expect(validateConfigFolder(path.join(home, "configs", "keys"), home).map((violation) => violation.detail)).toEqual([
+      "the config's folder holds .ssh",
+    ]);
   });
 });

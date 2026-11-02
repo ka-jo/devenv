@@ -21,8 +21,9 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/devenv"
 # never reads or runs anything from it. Kept apart from STATE_DIR, which no
 # container may ever see.
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/devenv"
-# Approved project config snapshots, per repo (see devcontainer/generator/src/trust.ts).
-# Inside STATE_DIR, so like the rest of it never mounted into any container.
+# Approved config snapshots, by content hash, shared by every worktree (see
+# devcontainer/generator/src/trust.ts). Inside STATE_DIR, so like the rest of it
+# never mounted into any container.
 TRUST_DIR="$STATE_DIR/trust"
 DEVCONTAINER_CLI="$REPO_DIR/node_modules/.bin/devcontainer"
 # The config used for any worktree whose project doesn't define its own.
@@ -97,11 +98,11 @@ _open_vscode() {
 # Generates everything the devcontainer CLI runs from for the resolved worktree
 # — the generated devcontainer.json (+ local Features) in CT_STATE/.devcontainer
 # and the agent-layer compose override, CT_STATE/override.yaml — via
-# devcontainer/generator (TypeScript, on Bun), which also validates and checks
-# approval of a project's own config. The rationale for every mount, pin and
-# setting in the agent layer lives there (src/override.ts).
-#   $1: 1 when a container is about to be built/created (project-config
-#       violations and missing approval then block instead of warn)
+# devcontainer/generator (TypeScript, on Bun), which also validates the config
+# and checks its approval. The rationale for every mount, pin and setting in the
+# agent layer lives there (src/override.ts).
+#   $1: 1 when a container is about to be built/created (sandbox escapes and
+#       missing approval then block instead of warn)
 #   $2: 1 to use devenv's default config even if the project has its own
 # Sets CT_INPUTS_HASH: identifies everything the container is created from, for
 # drift detection.
@@ -361,10 +362,10 @@ cmd_container_attach() {
     fi
 }
 
-# Reviews the worktree's project dev container config against the repo's last
-# approved one and approves it on confirmation (devcontainer/generator's
-# trust-cli.ts). Approval is per repo and per exact content, so every worktree
-# of the repo with the same config shares it.
+# Reviews the worktree's dev container config against that config's last
+# approved version and approves it on confirmation (devcontainer/generator's
+# trust-cli.ts). Approval is per exact content, so every worktree whose config
+# has the same files shares it.
 cmd_container_trust() {
     local repo="${1:-}" branch="${2:-}"
     if [[ -z "$repo" || -z "$branch" ]]; then

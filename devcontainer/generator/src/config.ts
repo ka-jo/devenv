@@ -30,8 +30,6 @@ export interface GeneratedConfigInputs {
   readonly overridePath: string;
   /** Container path of the worktree. */
   readonly workspaceFolder: string;
-  /** Whether the source is devenv's own default config rather than a project's. */
-  readonly isDefault: boolean;
 }
 
 /** A derived config plus what was changed in the source, for reporting to the user. */
@@ -40,7 +38,7 @@ export interface DerivedConfig {
   readonly config: GeneratedConfig;
   /** Absolute paths of the source's compose files, in merge order. */
   readonly composeFiles: readonly string[];
-  /** One line per change made to the project's own config. */
+  /** One line per change made to the source config. */
   readonly notices: readonly string[];
 }
 
@@ -49,18 +47,19 @@ export const DEVENV_FEATURES_SUBDIR = ".devenv-features";
 
 /**
  * Parses a `devcontainer.json` through the devcontainer CLI's `read-configuration`, so JSONC and `${...}` variables
- * resolve exactly as the CLI itself will resolve them — against the worktree.
+ * resolve exactly as the CLI itself will resolve them.
  *
- * @param context - Supplies the CLI path and the worktree.
+ * @param context - Supplies the CLI path.
+ * @param workspaceFolder - What `${localWorkspaceFolder}` resolves to: the worktree, for a source config.
  * @param configPath - The `devcontainer.json` to read.
  * @param shouldMerge - Whether to also resolve what its Features contribute. That resolution only accepts local
- * Features under the worktree's `.devcontainer/`, so it fails for devenv's default config — which needs no merged view,
- * as it's never validated.
+ * Features under `<workspaceFolder>/.devcontainer/`, so read a staged generated config for it.
  * @returns The config, and the config merged with what its Features contribute.
  * @throws {@link GeneratorError} when the CLI can't read it.
  */
 export async function readSourceConfig(
   context: GeneratorContext,
+  workspaceFolder: string,
   configPath: string,
   shouldMerge: boolean,
 ): Promise<ResolvedSourceConfig> {
@@ -69,7 +68,7 @@ export async function readSourceConfig(
       context.devcontainerCli,
       "read-configuration",
       "--workspace-folder",
-      context.worktreePath,
+      workspaceFolder,
       "--config",
       configPath,
       ...(shouldMerge ? ["--include-merged-configuration"] : []),
@@ -119,12 +118,12 @@ export function deriveGeneratedConfig(source: DevcontainerConfig, inputs: Genera
 
   const notices: string[] = [];
   // read-configuration adds configFilePath; it isn't part of the devcontainer.json schema. initializeCommand runs on
-  // the HOST, so a project's would be host code execution from an agent-writable file.
+  // the HOST, outside every sandbox.
   const { configFilePath: _, initializeCommand, ...config } = source;
-  if (initializeCommand !== undefined && !inputs.isDefault) {
+  if (initializeCommand !== undefined) {
     notices.push("initializeCommand removed (it would run on the host)");
   }
-  if (!inputs.isDefault && typeof source.workspaceFolder === "string" && source.workspaceFolder !== inputs.workspaceFolder) {
+  if (typeof source.workspaceFolder === "string" && source.workspaceFolder !== inputs.workspaceFolder) {
     notices.push(`workspaceFolder changed from ${source.workspaceFolder} to ${inputs.workspaceFolder}`);
   }
   const features = typeof source.features === "object" && source.features !== null ? source.features : {};
@@ -132,14 +131,14 @@ export function deriveGeneratedConfig(source: DevcontainerConfig, inputs: Genera
   return {
     config: {
       ...config,
-      ...(inputs.isDefault && initializeCommand !== undefined ? { initializeCommand } : {}),
       service,
       // Absolute because the generated file doesn't live beside them; the override goes last so it wins.
       dockerComposeFile: [...absoluteComposeFiles, inputs.overridePath],
       workspaceFolder: inputs.workspaceFolder,
       features: { ...features, [`./${DEVENV_FEATURES_SUBDIR}/agent`]: {} },
-      // A project image's user rarely has the host user's UID, which every read-write bind mount needs.
-      ...(inputs.isDefault ? {} : { updateRemoteUserUID: true }),
+      // An image's user rarely has the host user's UID, which every read-write bind mount needs; a config that sets
+      // it knows its user.
+      updateRemoteUserUID: source.updateRemoteUserUID ?? true,
     },
     composeFiles: absoluteComposeFiles,
     notices,

@@ -12,3 +12,16 @@ import type { GeneratorContext } from "./context.ts";
 export function containerPathOf(context: GeneratorContext, hostPath: string): string {
   return path.posix.join(context.containerRepoDir, path.relative(context.repoDir, hostPath));
 }
+
+/**
+ * Whether a host path is a directory or anywhere beneath it, compared as written (resolve symlinks first to compare
+ * real locations).
+ *
+ * @param candidate - The path to test.
+ * @param root - The directory.
+ * @returns `true` when `candidate` is `root` or inside it.
+ */
+export function isPathInside(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}

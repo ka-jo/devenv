@@ -1,21 +1,24 @@
 import { createHash, type Hash } from "node:crypto";
-import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { DEVENV_FEATURES_SUBDIR, localFeaturePaths } from "./config.ts";
+import { DEVENV_FEATURES_SUBDIR } from "./config.ts";
 import type { GeneratorContext } from "./context.ts";
 import { GeneratorError } from "./errors.ts";
 import { resolveWorktreeGitLayout } from "./git.ts";
 import { buildOverride, renderOverride } from "./override.ts";
-import { formatViolations, loadWorktreeConfig, overridePathOf } from "./project.ts";
+import { formatViolations, formatWarnings, generatedDirOf, loadWorktreeConfig, overridePathOf } from "./project.ts";
 import { isConfigSetApproved } from "./trust.ts";
 
 /** What {@link generateWorktreeConfig} reports back to `lib/container.sh`. */
 export interface GenerateResult {
   /** The compose service the agent layer was applied to. */
   readonly service: string;
-  /** One line per automatic change made to a project's config. */
+  /** One line per automatic change made to the config. */
   readonly notices: readonly string[];
-  /** Problems that would block creating a container, reported instead because one already exists. */
+  /**
+   * Ways the config may expose host files, plus problems that would block creating a container, reported instead
+   * because one already exists.
+   */
   readonly warnings: readonly string[];
   /** Identifies everything a container would be created from, so `up` can tell when an existing one is stale. */
   readonly inputsHash: string;
@@ -23,8 +26,7 @@ export interface GenerateResult {
 
 /**
  * Writes the generated `devcontainer.json`, its local Features, and the compose override for one worktree into
- * {@link GeneratorContext.stateDir} — after checking a project's config against devenv's sandbox rules and its
- * approval.
+ * {@link GeneratorContext.stateDir} — after checking the config against devenv's sandbox rules and its approval.
  *
  * @param context - The worktree and host description from `lib/container.sh`.
  * @returns What was generated, changed, and found.
@@ -32,12 +34,15 @@ export interface GenerateResult {
  * a sandbox rule or hasn't been approved.
  */
 export async function generateWorktreeConfig(context: GeneratorContext): Promise<GenerateResult> {
-  const { source, resolved, derived, model, violations, isMergedChecked, configSet } = await loadWorktreeConfig(context);
+  const { name, derived, model, violations, warnings, isMergedChecked, configSet } = await loadWorktreeConfig(
+    context,
+    context.stateDir,
+  );
 
-  const blockers = [...formatViolations(violations, context, isMergedChecked)];
-  if (configSet !== undefined && !isConfigSetApproved(context.trustDir, context.repo, configSet.hash)) {
+  const blockers = formatViolations(violations, isMergedChecked);
+  if (!isConfigSetApproved(context.trustDir, configSet.hash)) {
     blockers.push(
-      "the project's dev container config hasn't been approved in this form (new, or changed since last approved); " +
+      `the dev container config ${name} hasn't been approved in this form (new, or changed since last approved); ` +
         `review it with: devenv container trust ${context.repo} ${context.branch}`,
     );
   }
@@ -45,20 +50,9 @@ export async function generateWorktreeConfig(context: GeneratorContext): Promise
     throw new GeneratorError(blockers.join("\n"));
   }
 
-  const devcontainerDir = path.join(context.stateDir, ".devcontainer");
-  rmSync(devcontainerDir, { recursive: true, force: true });
-  mkdirSync(devcontainerDir, { recursive: true });
+  // loadWorktreeConfig staged everything but the override, which can only be built from the validated model.
+  const devcontainerDir = generatedDirOf(context.stateDir);
   writeFileSync(path.join(devcontainerDir, "devcontainer.json"), `${JSON.stringify(derived.config, null, 2)}\n`);
-  // The CLI resolves local Features ("./<path>") relative to the config file and only accepts them under
-  // <workspace-folder>/.devcontainer/ (lib/container.sh's _devcontainer passes stateDir as the workspace folder), so
-  // the config's own are copied beside it at the same relative paths, and devenv's linked in as their own subdir.
-  // That check is on the path as written, so the link passes it. The project's are copied rather than linked: a link
-  // would point back into the agent-writable worktree.
-  for (const feature of localFeaturePaths(resolved.configuration)) {
-    cpSync(path.join(source.configDir, feature), path.join(devcontainerDir, feature), { recursive: true });
-  }
-  symlinkSync(context.featuresDir, path.join(devcontainerDir, DEVENV_FEATURES_SUBDIR));
-
   const git = resolveWorktreeGitLayout(context);
   // Pinned read-only by the override, so it has to exist as a mount source.
   mkdirSync(path.join(git.bare, "hooks"), { recursive: true });
@@ -68,15 +62,14 @@ export async function generateWorktreeConfig(context: GeneratorContext): Promise
   return {
     service: derived.config.service,
     notices: [...derived.notices, ...notices],
-    warnings: blockers,
-    inputsHash: hashInputs(devcontainerDir, context.featuresDir, overridePathOf(context), configSet?.hash ?? hashTopLevelFiles(source.configDir)),
+    warnings: [...formatWarnings(warnings), ...blockers],
+    inputsHash: hashInputs(devcontainerDir, context.featuresDir, overridePathOf(context), configSet.hash),
   };
 }
 
 /**
- * Hash of the generated config, its local Features, devenv's Features, the override, and a hash of the source's own
- * files — a project's approved config set, or for the default config every file beside it (compose file, Dockerfile,
- * the scripts it COPYs). Changes elsewhere in a build context aren't detected.
+ * Hash of the generated config, its local Features, devenv's Features, the override, and the config set's hash.
+ * Changes in a build context outside the config's folder aren't detected.
  */
 function hashInputs(devcontainerDir: string, featuresDir: string, overridePath: string, sourceHash: string): string {
   const hash = createHash("sha256").update(sourceHash).update("\0").update(readFileSync(overridePath));
@@ -95,13 +88,4 @@ function updateWithTree(hash: Hash, dir: string, prefix: string): void {
   for (const file of files) {
     hash.update("\0").update(path.join(prefix, path.relative(dir, file))).update("\0").update(readFileSync(file));
   }
-}
-
-/** Hash of the files directly inside a directory, by name and content. */
-function hashTopLevelFiles(dir: string): string {
-  const hash = createHash("sha256");
-  for (const entry of readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile()).sort((a, b) => a.name.localeCompare(b.name))) {
-    hash.update(entry.name).update("\0").update(readFileSync(path.join(dir, entry.name))).update("\0");
-  }
-  return hash.digest("hex");
 }
