@@ -103,20 +103,23 @@ _open_vscode() {
 # agent layer lives there (src/override.ts).
 #   $1: 1 when a container is about to be built/created (sandbox escapes and
 #       missing approval then block instead of warn)
-#   $2: 1 to use devenv's default config even if the project has its own
-# Sets CT_INPUTS_HASH: identifies everything the container is created from, for
-# drift detection.
+#   $2: absolute path of a config to use from now on; empty to keep the one
+#       the worktree last used
+# Sets CT_INPUTS_HASH (identifies everything a container would be created from)
+# and CT_CREATED_HASH (the one the existing container was created from, if
+# recorded), for drift detection.
 _container_generate() {
     local result
     result="$(_container_context_json "$1" "$2" | bun "$REPO_DIR/devcontainer/generator/src/cli.ts")" || exit 1
     CT_INPUTS_HASH="$(printf '%s' "$result" | jq -r '.inputsHash')"
+    CT_CREATED_HASH="$(printf '%s' "$result" | jq -r '.createdHash // empty')"
     local line
     while IFS= read -r line; do _note "$line"; done < <(printf '%s' "$result" | jq -r '.notices[]')
     while IFS= read -r line; do _warn "$line"; done < <(printf '%s' "$result" | jq -r '.warnings[]')
 }
 
 # The JSON context devcontainer/generator's entry points read on stdin.
-#   $1: isCreating (0/1), $2: shouldForceDefault (0/1)
+#   $1: isCreating (0/1), $2: configPath (absolute, or empty for none)
 _container_context_json() {
     _require_devcontainer_cli
     command -v bun &>/dev/null || {
@@ -130,9 +133,8 @@ _container_context_json() {
         --arg containerRepoDir "$CONTAINER_REPO_DIR" --arg containerClaudeDir "$CONTAINER_CLAUDE_DIR" \
         --arg proxyNetwork "$SHARED_PROXY_NET" --arg defaultConfig "$DEFAULT_CONFIG" \
         --arg featuresDir "$DEVENV_FEATURES_DIR" --arg devcontainerCli "$DEVCONTAINER_CLI" \
-        --arg trustDir "$TRUST_DIR" \
+        --arg trustDir "$TRUST_DIR" --arg configPath "${2:-}" \
         --argjson isCreating "$([[ "${1:-0}" -eq 1 ]] && echo true || echo false)" \
-        --argjson shouldForceDefault "$([[ "${2:-0}" -eq 1 ]] && echo true || echo false)" \
         '$ARGS.named'
 }
 
@@ -261,14 +263,16 @@ _shared_maybe_down() {
 }
 
 cmd_container_up() {
-    local code=0 rebuild=0 use_default=0 args=()
-    for a in "$@"; do
-        case "$a" in
+    local code=0 rebuild=0 config="" args=()
+    while (($#)); do
+        case "$1" in
             --code) code=1 ;;
             --rebuild) rebuild=1 ;;
-            --default) use_default=1 ;;
-            *) args+=("$a") ;;
+            --config) config="$(_config_arg_path "${2:-}")" || exit 1; shift ;;
+            --config=*) config="$(_config_arg_path "${1#--config=}")" || exit 1 ;;
+            *) args+=("$1") ;;
         esac
+        shift
     done
     local repo="${args[0]:-}" branch="${args[1]:-}"
     if [[ -z "$repo" || -z "$branch" ]]; then
@@ -277,18 +281,33 @@ cmd_container_up() {
     fi
 
     _container_resolve "$repo" "$branch"
-    _container_up "$rebuild" "$use_default"
+    _container_up "$rebuild" "$config"
     echo "up: $CT_PN"
     if [[ "$code" -eq 1 ]]; then
         _open_vscode
     fi
 }
 
+# Resolves a --config value against the current directory and prints it as an
+# absolute path, which the generator records for later runs from anywhere.
+_config_arg_path() {
+    if [[ -z "$1" ]]; then
+        echo "error: --config needs a path to a dev container config file or folder" >&2
+        return 1
+    fi
+    realpath -e -- "$1" 2>/dev/null || {
+        echo "error: --config $1: no such file or directory" >&2
+        return 1
+    }
+}
+
 # Creates or starts the resolved worktree's container (and the shared stack
 # first). Shared by `container up` and `agent up`.
-#   $1: 1 to recreate it, $2: 1 to use devenv's default config
+#   $1: 1 to recreate it
+#   $2: absolute path of a config to use from now on; empty to keep the one the
+#       worktree last used
 _container_up() {
-    local rebuild="${1:-0}" use_default="${2:-0}" is_creating=1
+    local rebuild="${1:-0}" config="${2:-}" is_creating=1
     _shared_ensure_up
     _shared_wait_healthy
     if _container_exists && [[ "$rebuild" -ne 1 ]]; then
@@ -299,7 +318,7 @@ _container_up() {
         echo "stopping $CT_PN so its config can't change while it's checked and rebuilt" >&2
         docker compose -p "$CT_PN" stop >/dev/null
     fi
-    _container_generate "$is_creating" "$use_default"
+    _container_generate "$is_creating" "$config"
     _container_seed_claude_data
     _container_ensure_volume shared-pnpm-store
     _container_ensure_volume ka-jo-zsh-history
@@ -307,20 +326,22 @@ _container_up() {
     # The CLI never recreates an existing container on its own, so config
     # drift is reported rather than silently applied (recreating discards
     # container-local state, e.g. background agent sessions).
-    local hash="$CT_INPUTS_HASH" up_args=() result
+    local up_args=() result
     if [[ "$rebuild" -eq 1 ]]; then
         up_args+=(--remove-existing-container)
-    elif [[ "$is_creating" -eq 0 ]]; then
-        if [[ "$(cat "$CT_STATE/created.sha256" 2>/dev/null)" != "$hash" ]]; then
-            _warn "config changed since this container was created; run 'devenv container up $CT_REPO $CT_BRANCH --rebuild' (or down/up) to apply it"
-        fi
+    elif [[ "$is_creating" -eq 0 && "$CT_CREATED_HASH" != "$CT_INPUTS_HASH" ]]; then
+        _warn "config changed since this container was created; run 'devenv container up $CT_REPO $CT_BRANCH --rebuild' (or down/up) to apply it"
     fi
     result="$(_devcontainer up "${up_args[@]}")" || {
         printf '%s\n' "$result" | jq -r '.message // .' >&2
         exit 1
     }
+    # Recorded only once the container exists: if a rebuild fails while the old
+    # container survives, it keeps the old hash and the drift warning with it.
     if [[ "$is_creating" -eq 1 ]]; then
-        printf '%s\n' "$hash" > "$CT_STATE/created.sha256"
+        local recorded
+        recorded="$(jq --arg hash "$CT_INPUTS_HASH" '.customizations.devenv.createdHash = $hash' "$CT_CONFIG")"
+        printf '%s\n' "$recorded" > "$CT_CONFIG"
     fi
     # What exec consumers (_container_exec, the dashboard) need to reach the
     # container without the compose files: who to run as.
@@ -366,14 +387,24 @@ cmd_container_attach() {
 # approved version and approves it on confirmation (devcontainer/generator's
 # trust-cli.ts). Approval is per exact content, so every worktree whose config
 # has the same files shares it.
+#   --config <path>: review that config instead of the one the worktree would use
 cmd_container_trust() {
-    local repo="${1:-}" branch="${2:-}"
+    local config="" args=()
+    while (($#)); do
+        case "$1" in
+            --config) config="$(_config_arg_path "${2:-}")" || exit 1; shift ;;
+            --config=*) config="$(_config_arg_path "${1#--config=}")" || exit 1 ;;
+            *) args+=("$1") ;;
+        esac
+        shift
+    done
+    local repo="${args[0]:-}" branch="${args[1]:-}"
     if [[ -z "$repo" || -z "$branch" ]]; then
         _pick_worktree_any
         repo="$PICK_REPO"; branch="$PICK_BRANCH"
     fi
     _container_resolve "$repo" "$branch"
-    _container_context_json 0 0 | bun "$REPO_DIR/devcontainer/generator/src/trust-cli.ts"
+    _container_context_json 0 "$config" | bun "$REPO_DIR/devcontainer/generator/src/trust-cli.ts"
 }
 
 cmd_container_list() {

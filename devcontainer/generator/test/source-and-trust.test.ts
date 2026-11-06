@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { GeneratorError } from "../src/errors.ts";
+import { readDevenvRecord, withDevenvRecord } from "../src/record.ts";
 import { resolveSourceConfig } from "../src/source.ts";
 import {
   approveConfigSet,
@@ -22,34 +23,78 @@ beforeEach(() => {
 afterEach(() => fixture.cleanup());
 
 describe("resolveSourceConfig", () => {
-  test("falls back to the default config when the project has none", () => {
-    expect(resolveSourceConfig(fixture.context).configPath).toBe(fixture.context.defaultConfig);
+  test("falls back to the default config when nothing else picks one", () => {
+    expect(resolveSourceConfig(fixture.context, {}).configPath).toBe(fixture.context.defaultConfig);
   });
 
-  test("prefers .devcontainer/devcontainer.json, then .devcontainer.json", () => {
+  test("prefers the worktree's .devcontainer/devcontainer.json, then .devcontainer.json", () => {
     const { worktreePath } = fixture.context;
     writeFiles(worktreePath, { ".devcontainer.json": "{}" });
-    expect(resolveSourceConfig(fixture.context)).toEqual({
+    expect(resolveSourceConfig(fixture.context, {})).toEqual({
       configPath: path.join(worktreePath, ".devcontainer.json"),
       configDir: worktreePath,
       rootDir: worktreePath,
     });
     writeFiles(worktreePath, { ".devcontainer/devcontainer.json": "{}" });
-    expect(resolveSourceConfig(fixture.context)).toEqual({
+    expect(resolveSourceConfig(fixture.context, {})).toEqual({
       configPath: path.join(worktreePath, ".devcontainer", "devcontainer.json"),
       configDir: path.join(worktreePath, ".devcontainer"),
       rootDir: worktreePath,
     });
   });
 
-  test("uses the default when forced, even with a project config", () => {
+  test("uses the config the worktree last used over its own", () => {
     writeFiles(fixture.context.worktreePath, { ".devcontainer/devcontainer.json": "{}" });
-    expect(resolveSourceConfig({ ...fixture.context, shouldForceDefault: true }).configPath).toBe(fixture.context.defaultConfig);
+    writeFiles(path.dirname(fixture.context.defaultConfig), { "devcontainer.json": "{}" });
+    expect(resolveSourceConfig(fixture.context, { sourceConfig: fixture.context.defaultConfig }).configPath).toBe(
+      fixture.context.defaultConfig,
+    );
+  });
+
+  test("refuses a last-used config that's gone rather than silently switching", () => {
+    expect(() => resolveSourceConfig(fixture.context, { sourceConfig: path.join(fixture.root, "gone.json") })).toThrow(
+      "no longer exists",
+    );
+  });
+
+  test("uses a requested config file or folder over everything else", () => {
+    const configs = path.join(fixture.root, "configs");
+    writeFiles(configs, { "node/devcontainer.json": "{}", "py/.devcontainer/devcontainer.json": "{}", "custom.json": "{}" });
+    const record = { sourceConfig: fixture.context.defaultConfig };
+    const pick = (configPath: string): string => resolveSourceConfig({ ...fixture.context, configPath }, record).configPath;
+
+    expect(pick(path.join(configs, "custom.json"))).toBe(path.join(configs, "custom.json"));
+    expect(pick(path.join(configs, "node"))).toBe(path.join(configs, "node", "devcontainer.json"));
+    expect(resolveSourceConfig({ ...fixture.context, configPath: path.join(configs, "py") }, record)).toMatchObject({
+      configPath: path.join(configs, "py", ".devcontainer", "devcontainer.json"),
+      rootDir: path.join(configs, "py"),
+    });
+  });
+
+  test("refuses a requested path that's missing or holds no config", () => {
+    expect(() => resolveSourceConfig({ ...fixture.context, configPath: path.join(fixture.root, "nope") }, {})).toThrow(
+      "doesn't exist",
+    );
+    expect(() => resolveSourceConfig({ ...fixture.context, configPath: fixture.root }, {})).toThrow("has no dev container config");
   });
 
   test("refuses to guess between configs in .devcontainer/ subfolders", () => {
     writeFiles(fixture.context.worktreePath, { ".devcontainer/a/devcontainer.json": "{}", ".devcontainer/b/devcontainer.json": "{}" });
-    expect(() => resolveSourceConfig(fixture.context)).toThrow(GeneratorError);
+    expect(() => resolveSourceConfig(fixture.context, {})).toThrow(GeneratorError);
+  });
+});
+
+describe("devenv record", () => {
+  test("round-trips through a generated config, replacing any customizations.devenv of the config's own", () => {
+    const file = path.join(fixture.root, "generated.json");
+    expect(readDevenvRecord(file)).toEqual({});
+    const config = { service: "app", customizations: { vscode: { extensions: ["x"] }, devenv: { sourceConfig: "/spoofed" } } };
+    const recorded = withDevenvRecord(config, { sourceConfig: "/c/devcontainer.json", createdHash: "abc" });
+    writeFileSync(file, JSON.stringify(recorded));
+
+    expect(readDevenvRecord(file)).toEqual({ sourceConfig: "/c/devcontainer.json", createdHash: "abc" });
+    expect(recorded.customizations).toMatchObject({ vscode: { extensions: ["x"] } });
+    expect(config.customizations.devenv.sourceConfig).toBe("/spoofed");
   });
 });
 
@@ -64,7 +109,7 @@ describe("collectConfigSet", () => {
 
   function configSetIn(worktreePath: string, home = "/home/u"): ReturnType<typeof collectConfigSet> {
     return collectConfigSet(
-      resolveSourceConfig({ ...fixture.context, worktreePath }),
+      resolveSourceConfig({ ...fixture.context, worktreePath }, {}),
       { features: { "./features/f": {} } },
       [path.join(worktreePath, ".devcontainer", "compose.yml")],
       { services: { app: { build: { context: worktreePath, dockerfile: "docker/app.Dockerfile" } } } },
@@ -101,7 +146,7 @@ describe("collectConfigSet", () => {
   test("keys files outside the config's folder by their absolute path", () => {
     const outside = path.join(fixture.root, "shared", "compose.yml");
     writeFiles(path.dirname(outside), { "compose.yml": "services: {}" });
-    const configSet = collectConfigSet(resolveSourceConfig(fixture.context), {}, [outside], { services: {} }, "/home/u");
+    const configSet = collectConfigSet(resolveSourceConfig(fixture.context, {}), {}, [outside], { services: {} }, "/home/u");
     expect([...configSet.files.keys()]).toContain(path.join(OUTSIDE_ROOT_DIR, outside));
     expect(configSet.files.has(".devcontainer/devcontainer.json")).toBe(true);
   });
@@ -124,7 +169,7 @@ describe("approval", () => {
   test("is per exact content, for any config, and records each name's last approved snapshot", () => {
     const { trustDir } = fixture.context;
     writeFiles(fixture.context.worktreePath, { ".devcontainer.json": "{}" });
-    const configSet = collectConfigSet(resolveSourceConfig(fixture.context), {}, [], { services: {} }, "/home/u");
+    const configSet = collectConfigSet(resolveSourceConfig(fixture.context, {}), {}, [], { services: {} }, "/home/u");
     expect(isConfigSetApproved(trustDir, configSet.hash)).toBe(false);
     expect(lastApprovedSnapshot(trustDir, "r:.devcontainer.json")).toBeUndefined();
 
@@ -143,13 +188,13 @@ describe("configNameOf", () => {
     writeFiles(main, { ".git": "gitdir: ../.git/worktrees/main\n", ".devcontainer/devcontainer.json": "{}" });
     writeFiles(fixture.context.worktreePath, { ".devcontainer/devcontainer.json": "{}" });
 
-    expect(configNameOf(fixture.context, resolveSourceConfig(fixture.context))).toBe("r:.devcontainer/devcontainer.json");
-    const mainSource = resolveSourceConfig({ ...fixture.context, worktreePath: main });
+    expect(configNameOf(fixture.context, resolveSourceConfig(fixture.context, {}))).toBe("r:.devcontainer/devcontainer.json");
+    const mainSource = resolveSourceConfig({ ...fixture.context, worktreePath: main }, {});
     expect(configNameOf(fixture.context, mainSource)).toBe("r:.devcontainer/devcontainer.json");
   });
 
   test("names any other config by its absolute path", () => {
-    const source = resolveSourceConfig(fixture.context);
+    const source = resolveSourceConfig(fixture.context, {});
     expect(configNameOf(fixture.context, source)).toBe(fixture.context.defaultConfig);
   });
 });

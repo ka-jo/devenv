@@ -12,6 +12,7 @@ import {
 } from "./config.ts";
 import type { GeneratorContext } from "./context.ts";
 import { containerPathOf } from "./paths.ts";
+import { type DevenvRecord, readDevenvRecord, withDevenvRecord } from "./record.ts";
 import { resolveSourceConfig, type SourceConfig } from "./source.ts";
 import { collectConfigSet, configNameOf, type ConfigSet } from "./trust.ts";
 import { isSandboxEscape, type Violation, validateConfigFolder, validateMergedConfig, validateProjectConfig } from "./validate.ts";
@@ -22,6 +23,8 @@ export interface LoadedConfig {
   readonly source: SourceConfig;
   /** Its name, for finding its previous approval. */
   readonly name: string;
+  /** What to record in the generated config: this config, and the existing container's created hash. */
+  readonly record: DevenvRecord;
   /** The config as the devcontainer CLI resolves it. */
   readonly resolved: ResolvedSourceConfig;
   /** The config the CLI will run from. */
@@ -61,7 +64,8 @@ export function generatedDirOf(stageDir: string): string {
  *
  * @param context - The worktree and host description.
  * @param stageDir - A host-only directory to stage the generated `.devcontainer/` in (see {@link generatedDirOf}),
- * which resolving what Features add requires. Its `.devcontainer/` is replaced.
+ * which resolving what Features add requires. Its `.devcontainer/` is replaced, its `devcontainer.json` carrying the
+ * new {@link LoadedConfig.record}.
  * @returns Everything needed to generate from the config or to review it.
  * @throws {@link GeneratorError} when the config can't be read or isn't compose-based.
  *
@@ -69,7 +73,13 @@ export function generatedDirOf(stageDir: string): string {
  * The staged `devcontainer.json` lacks devenv's compose override, which the caller adds once it's written.
  */
 export async function loadWorktreeConfig(context: GeneratorContext, stageDir: string): Promise<LoadedConfig> {
-  const source = resolveSourceConfig(context);
+  // Read before staging: when stageDir is the state dir, staging replaces the file it's read from.
+  const previous = readDevenvRecord(path.join(generatedDirOf(context.stateDir), "devcontainer.json"));
+  const source = resolveSourceConfig(context, previous);
+  const record: DevenvRecord = {
+    sourceConfig: source.configPath,
+    ...(previous.createdHash !== undefined ? { createdHash: previous.createdHash } : {}),
+  };
   const resolved = await readSourceConfig(context, context.worktreePath, source.configPath, false);
   const derived = deriveGeneratedConfig(resolved.configuration, {
     sourceDir: source.configDir,
@@ -90,8 +100,9 @@ export async function loadWorktreeConfig(context: GeneratorContext, stageDir: st
       allowedRoots,
     }),
   ];
-  stageGeneratedConfig(context, source, resolved, { ...derived.config, dockerComposeFile: derived.composeFiles }, stageDir);
-  const loaded = { source, name: configNameOf(context, source), derived, model, configSet };
+  const stagedConfig = withDevenvRecord({ ...derived.config, dockerComposeFile: derived.composeFiles }, record);
+  stageGeneratedConfig(context, source, resolved, stagedConfig, stageDir);
+  const loaded = { source, name: configNameOf(context, source), record, derived, model, configSet };
   if (found.some((violation) => isSandboxEscape(violation.rule))) {
     return { ...loaded, resolved, ...splitViolations(found), isMergedChecked: false };
   }
@@ -154,7 +165,7 @@ export function formatViolations(violations: readonly Violation[], isMergedCheck
     "the dev container config breaks devenv's sandbox rules:",
     ...violations.map(formatViolation),
     ...(isMergedChecked ? [] : ["  (what its Features and base image add is checked once these are fixed)"]),
-    "  see docs/agent-container-security.md (sections named by the [rule])",
+    "  see docs/agent-container-security.md (sections named by the [rule]), or pick another config with --config <path>",
   ];
 }
 

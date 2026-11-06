@@ -86,19 +86,25 @@ _agent_pick() {
 }
 
 cmd_agent_up() {
-    local repo="" branch="" name="agent" args=() extra=0
-    for a in "$@"; do
+    local repo="" branch="" name="agent" config="" args=() extra=0
+    while (($#)); do
         if [[ "$extra" -eq 1 ]]; then
-            args+=("$a")
-        elif [[ "$a" == "--" ]]; then
+            args+=("$1")
+        elif [[ "$1" == "--" ]]; then
             extra=1
+        elif [[ "$1" == "--config" ]]; then
+            config="$(_config_arg_path "${2:-}")" || exit 1
+            shift
+        elif [[ "$1" == --config=* ]]; then
+            config="$(_config_arg_path "${1#--config=}")" || exit 1
         elif [[ -z "$repo" ]]; then
-            repo="$a"
+            repo="$1"
         elif [[ -z "$branch" ]]; then
-            branch="$a"
+            branch="$1"
         else
-            name="$a"
+            name="$1"
         fi
+        shift
     done
 
     if [[ -z "$repo" || -z "$branch" ]]; then
@@ -107,7 +113,7 @@ cmd_agent_up() {
     fi
 
     _container_resolve "$repo" "$branch"
-    _container_up
+    _container_up 0 "$config"
 
     _agent_claude --tty --bg -n "$name" "${args[@]}"
     echo "agent up: $CT_PN (name: $name)"

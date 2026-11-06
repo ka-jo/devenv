@@ -49,7 +49,6 @@ export function createHostFixture(): HostFixture {
       featuresDir: path.join(repoDir, "devcontainer", "features"),
       devcontainerCli: "/unused",
       trustDir: path.join(root, "state", "trust"),
-      shouldForceDefault: false,
       isCreating: true,
     },
     cleanup: () => rmSync(root, { recursive: true, force: true }),

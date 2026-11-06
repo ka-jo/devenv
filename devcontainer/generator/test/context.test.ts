@@ -19,7 +19,6 @@ const complete = {
   featuresDir: "/home/u/devenv/devcontainer/features",
   devcontainerCli: "/home/u/devenv/node_modules/.bin/devcontainer",
   trustDir: "/home/u/.local/state/devenv/trust",
-  shouldForceDefault: false,
   isCreating: true,
 };
 
@@ -40,6 +39,11 @@ describe("parseGeneratorContext", () => {
     const { repo: _, ...missingRepo } = complete;
     expect(() => parseGeneratorContext(JSON.stringify(missingRepo))).toThrow('missing "repo"');
     expect(() => parseGeneratorContext(JSON.stringify({ ...complete, home: "" }))).toThrow('missing "home"');
+  });
+
+  test("keeps a requested config, and treats an empty one as none", () => {
+    expect(parseGeneratorContext(JSON.stringify({ ...complete, configPath: "/c" })).configPath).toBe("/c");
+    expect(parseGeneratorContext(JSON.stringify({ ...complete, configPath: "" }))).not.toHaveProperty("configPath");
   });
 
   test("requires flags to be booleans", () => {

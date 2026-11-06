@@ -29,7 +29,7 @@ export interface GeneratorContext {
   readonly containerClaudeDir: string;
   /** Docker name of the shared stack's internal proxy network. */
   readonly proxyNetwork: string;
-  /** The default `devcontainer.json`, used when the project has none. */
+  /** The default `devcontainer.json`, used when nothing else picks one. */
   readonly defaultConfig: string;
   /** devenv's local Features directory. */
   readonly featuresDir: string;
@@ -37,8 +37,8 @@ export interface GeneratorContext {
   readonly devcontainerCli: string;
   /** Host-only directory of approved project config snapshots, shared by every worktree; never mounted. */
   readonly trustDir: string;
-  /** Whether to use {@link GeneratorContext.defaultConfig} even when the project has its own config. */
-  readonly shouldForceDefault: boolean;
+  /** Absolute path of a config (file or folder) to use instead of the one the worktree would otherwise get. */
+  readonly configPath?: string;
   /**
    * Whether this run precedes building and creating a container. Only then do a project config's violations or
    * missing approval block; for an existing container nothing would be built from them, so they're warnings.
@@ -47,8 +47,8 @@ export interface GeneratorContext {
 }
 
 /**
- * Parses the JSON context `lib/container.sh` sends, checking every {@link GeneratorContext} field is present: paths
- * and names as non-empty strings, flags as booleans.
+ * Parses the JSON context `lib/container.sh` sends, checking every required {@link GeneratorContext} field is present:
+ * paths and names as non-empty strings, flags as booleans. An optional field may be absent or empty.
  *
  * @param json - The raw JSON text.
  * @returns The validated context.
@@ -97,7 +97,7 @@ export function parseGeneratorContext(json: string): GeneratorContext {
     featuresDir: field("featuresDir"),
     devcontainerCli: field("devcontainerCli"),
     trustDir: field("trustDir"),
-    shouldForceDefault: flag("shouldForceDefault"),
+    ...(typeof record.configPath === "string" && record.configPath !== "" ? { configPath: record.configPath } : {}),
     isCreating: flag("isCreating"),
   };
 }

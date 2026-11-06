@@ -88,11 +88,11 @@ devenv clone <url> [name]                      bare-clone a repo into worktrees/
 devenv worktree add <repo> <branch> [base]     add a worktree at worktrees/<repo>/<branch>
 devenv worktree rm <repo> <branch> [--force]   remove a worktree and delete its local branch
 devenv worktree list [repo]                    list worktrees for one repo, or all repos
-devenv container up <repo> <branch> [--rebuild] [--default]  build/start a worktree's dev container (and the shared firewall stack, if needed)
+devenv container up <repo> <branch> [--rebuild] [--config <path>]  build/start a worktree's dev container (and the shared firewall stack, if needed)
 devenv container down <repo> <branch>          stop a worktree's dev container (and the shared firewall stack, if it was the last one)
 devenv container attach <repo> <branch>        exec a zsh shell in a running dev container
 devenv container list                          list running devenv-managed containers, including the shared stack
-devenv container trust <repo> <branch>         review and approve a worktree's dev container config
+devenv container trust <repo> <branch> [--config <path>]  review and approve a worktree's (or the given) dev container config
 devenv install-extension [--skip-build]        install the egress approver VS Code extension on Windows
 ```
 
@@ -133,7 +133,7 @@ devenv container list                              # see what's running, across 
 
 `up` drives the [devcontainer CLI](https://github.com/devcontainers/cli) from the default config in `devcontainer/default/` (nothing is copied into the worktree), generating a per-worktree config and compose override (via `devcontainer/generator/`) in `~/.local/state/devenv/<project>/`, outside every container's mounts. An existing container is never recreated implicitly: if its config or image inputs changed, `up` warns, and `up --rebuild` recreates it (discarding state kept only in the container's own filesystem — Claude sessions and history survive, since they live in the worktree's data dir). VS Code doesn't own the container lifecycle here — start/stop it with the CLI, and if you want VS Code attached, use **Attach to Running Container** against `${COMPOSE_PROJECT_NAME}-devcontainer` (i.e. `<repo>-<branch>-devcontainer`) once it's up.
 
-**Projects with their own dev container config.** If a worktree has `.devcontainer/devcontainer.json` (or `.devcontainer.json`), `up` builds from it instead of devenv's default — compose-based configs for now — and layers devenv's agent sandbox on top. Builds run with full network access before any sandbox exists, so every config is treated as untrusted, devenv's default included:
+**Choosing a config.** `up --config <path>` builds from any dev container config — a `devcontainer.json`, or a folder holding one — wherever it lives, relative to the current directory. A worktree keeps using the config it last used, so `--config` only needs passing once. Without one, a worktree uses its own `.devcontainer/devcontainer.json` (or `.devcontainer.json`) if it has one, else devenv's default — compose-based configs for now — with devenv's agent sandbox layered on top. Builds run with full network access before any sandbox exists, so every config is treated as untrusted, devenv's default included:
 
 - It must not break devenv's sandbox rules (no privileged containers, host namespaces, dangerous capabilities, devices, runtime sockets, `network_mode`, or external networks — for every service, and for whatever its Features and base image add). A violation is reported with the rule's name, and no approval overrides it. Host paths outside the worktree and the config's folder, or a config folder holding your home directory or credentials, are warnings instead: shown at review and on every `up`, for you to weigh.
 - It must be approved: `devenv container trust <repo> <branch>` shows the config files (on later changes, just the diff since that config's last approval) and records approval of exactly that content. Approval is per content, so any worktree using the same files shares it; any change needs a new one.
