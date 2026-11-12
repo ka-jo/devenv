@@ -18,7 +18,7 @@ Before pushing for an RFC, check `docs/rfcs/` for an existing RFC that covers th
 
 Do not use this skill for:
 
-- Architectural decision records — those capture a decision and its rationale, not feature behavior.
+- Architectural decision records — those capture a decision and its rationale, not feature behavior. Use `create-adr`.
 - READMEs, runbooks, postmortems, or general documentation.
 - Implementation-level task lists or PR descriptions.
 
@@ -54,7 +54,7 @@ After drafting, walk the user through the major sections and ask specifically:
 - "Is the Behavior section grouped the way the system actually works, or is the grouping arbitrary?" (Grouping is a design judgment; ask explicitly.)
 - "Are there requirements in here that are actually about style or patterns rather than behavior?" (Style belongs in `CLAUDE.md` / `AGENTS.md`, not RFCs.)
 - "Are there open questions that should be resolved before this RFC is consumable?"
-- "Does this RFC depend on an architectural decision, or try to _make_ one?" An RFC may operate within recorded decisions (link them); it must not establish or change one. If the work requires a new architectural decision or a change to an existing one, that belongs in a decision record, not an RFC — stop and have the user settle and record the decision first, then build the RFC on it.
+- "Does this RFC depend on an architectural decision, or try to _make_ one?" An RFC may operate within recorded decisions (link them); it must not establish or change one. If the work requires a new architectural decision or a change to an existing one, that belongs in an ADR, not an RFC — stop and have the user settle and record the decision first (use `create-adr`), then build the RFC on it.
 - **Tense check**: "Does the Motivation section mark historical behavior with 'Prior to this RFC'? Are Interface and Behavior sections written in present tense as if describing the system as it is?" (An Implemented RFC should always read as a description of the current system. See `format-rules.md` § "Tense and temporal framing.")
 
 Open Questions section content is fine in `Draft` status. The user (not this skill) will decide when to promote to `Ready`, and they know the rule: `Ready` requires Open Questions to be empty.

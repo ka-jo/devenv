@@ -22,7 +22,7 @@ Trigger when:
 Do not use this skill for:
 
 - **New RFCs.** If the change is really a new surface rather than a change to an existing contract, use `create-rfc`. Rule of thumb: if the change would mostly add new sections rather than touch existing ones, it may deserve its own RFC with a `see_also` back-link — raise this with the user.
-- **Architectural decisions** — those belong in a decision record, not an RFC.
+- **Architectural decisions** — those belong in an ADR (use `create-adr`), not an RFC.
 
 ## Workflow
 
@@ -106,4 +106,4 @@ After editing, check and report to the user:
 ## Relationship to other skills
 
 - **`create-rfc`** authors new RFCs and owns `format-rules.md`, the single source of truth for RFC formatting and the amendment rules this skill applies. The boundary on Drafts: `create-rfc` owns the initial authoring session; subsequent revision passes belong here. Both follow the same format rules, so the boundary is low-stakes. When a change is really a new surface, hand off there.
-- **Recorded architectural decisions** (ADRs or equivalent) own durable decisions. If a change to an RFC reflects a reversal of one, the record needs updating too — flag it.
+- **Recorded architectural decisions** (ADRs or equivalent) own durable decisions. If a change to an RFC reflects a reversal of one, that takes a superseding ADR (use `create-adr`) — flag it.
