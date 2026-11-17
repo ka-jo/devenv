@@ -55,9 +55,9 @@ describe("buildOverride: agent layer", () => {
     const primary = override.services.devcontainer;
     expect(override.name).toBe("r-feat-x");
     expect(primary?.container_name).toBe("r-feat-x-devcontainer");
-    expect(primary?.working_dir).toBe("/devenv/worktrees/r/feat/x");
+    expect(primary?.working_dir).toBe("/home/c/devenv/worktrees/r/feat/x");
     expect(primary?.environment?.HTTPS_PROXY).toBe("http://firewall:3128");
-    expect(primary?.environment?.CLAUDE_CONFIG_DIR).toBe("/.claude");
+    expect(primary?.environment?.CLAUDE_CONFIG_DIR).toBe("/home/c/.claude");
     expect(override.networks.proxy_net).toEqual({ external: true, name: "devenv-shared_proxy_net" });
   });
 
@@ -71,11 +71,11 @@ describe("buildOverride: agent layer", () => {
   test("mounts devenv read-only, masks worktrees, and takes only auth and read-only settings from ~/.claude", () => {
     const volumes = buildOverride(context, defaultModel, "devcontainer", resolveWorktreeGitLayout(context)).override
       .services.devcontainer?.volumes;
-    expect(mountAt(volumes, "/devenv")).toMatchObject({ source: context.repoDir, read_only: true });
-    expect(mountAt(volumes, "/devenv/worktrees")).toEqual({ type: "tmpfs", target: "/devenv/worktrees", read_only: true });
-    expect(mountAt(volumes, "/.claude")).toMatchObject({ source: context.claudeDataDir, read_only: false });
-    expect(mountAt(volumes, "/.claude/.credentials.json")).toMatchObject({ read_only: false });
-    expect(mountAt(volumes, "/.claude/settings.json")).toMatchObject({ read_only: true });
+    expect(mountAt(volumes, "/home/c/devenv")).toMatchObject({ source: context.repoDir, read_only: true });
+    expect(mountAt(volumes, "/home/c/devenv/worktrees")).toEqual({ type: "tmpfs", target: "/home/c/devenv/worktrees", read_only: true });
+    expect(mountAt(volumes, "/home/c/.claude")).toMatchObject({ source: context.claudeDataDir, read_only: false });
+    expect(mountAt(volumes, "/home/c/.claude/.credentials.json")).toMatchObject({ read_only: false });
+    expect(mountAt(volumes, "/home/c/.claude/settings.json")).toMatchObject({ read_only: true });
     const hostClaude = (volumes ?? []).filter((mount) => mount.type === "bind" && mount.source.startsWith("/home/u/.claude"));
     expect(hostClaude).toHaveLength(2);
   });
@@ -84,16 +84,16 @@ describe("buildOverride: agent layer", () => {
     const volumes = buildOverride(context, defaultModel, "devcontainer", resolveWorktreeGitLayout(context)).override
       .services.devcontainer?.volumes;
     const readOnlyOf = (target: string): boolean | undefined => mountAt(volumes, target)?.read_only;
-    expect(readOnlyOf("/devenv/worktrees/r/feat/x")).toBe(false);
-    expect(readOnlyOf("/devenv/worktrees/r/.git")).toBe(false);
-    expect(readOnlyOf("/devenv/worktrees/r/.git/worktrees/x")).toBe(false);
+    expect(readOnlyOf("/home/c/devenv/worktrees/r/feat/x")).toBe(false);
+    expect(readOnlyOf("/home/c/devenv/worktrees/r/.git")).toBe(false);
+    expect(readOnlyOf("/home/c/devenv/worktrees/r/.git/worktrees/x")).toBe(false);
     for (const pinned of [
-      "/devenv/worktrees/r/feat/x/.git",
-      "/devenv/worktrees/r/.git/config",
-      "/devenv/worktrees/r/.git/hooks",
-      "/devenv/worktrees/r/.git/worktrees",
-      "/devenv/worktrees/r/.git/worktrees/x/commondir",
-      "/devenv/worktrees/other/.git",
+      "/home/c/devenv/worktrees/r/feat/x/.git",
+      "/home/c/devenv/worktrees/r/.git/config",
+      "/home/c/devenv/worktrees/r/.git/hooks",
+      "/home/c/devenv/worktrees/r/.git/worktrees",
+      "/home/c/devenv/worktrees/r/.git/worktrees/x/commondir",
+      "/home/c/devenv/worktrees/other/.git",
     ]) {
       expect(readOnlyOf(pinned)).toBe(true);
     }

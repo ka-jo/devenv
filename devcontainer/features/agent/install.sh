@@ -3,8 +3,6 @@
 # build time.
 set -euo pipefail
 
-# Fixed container path, mirroring CONTAINER_REPO_DIR in lib/container.sh.
-DEVENV_DIR="/devenv"
 MIN_GIT_VERSION="2.48"
 
 # devenv creates worktrees with --relative-paths, which sets
@@ -30,6 +28,12 @@ su "$_REMOTE_USER" -c 'curl -fsSL https://claude.ai/install.sh | bash'
 # Not $_REMOTE_USER_HOME: the CLI computes it before the build, so it's empty
 # when the user is created by an earlier Feature (common-utils) in this build.
 user_home="$(getent passwd "$_REMOTE_USER" | cut -d: -f6)"
+# devenv mounts the repo at ~/devenv and Claude's config dir at ~/.claude, as on
+# the host. The mounts are generated before the container exists, so
+# lib/container.sh reads this file from the built image to know where ~ is.
+DEVENV_DIR="$user_home/devenv"
+mkdir -p /etc/devenv
+printf '%s\n' "$user_home" > /etc/devenv/home
 # A symlink, not a copy: the native installer's auto-update repoints
 # ~/.local/bin/claude, and this follows it.
 ln -sf "$user_home/.local/bin/claude" /usr/local/bin/claude
@@ -38,7 +42,7 @@ ln -sf "$user_home/.local/bin/claude" /usr/local/bin/claude
 ln -sf "$DEVENV_DIR/bin/devenv" /usr/local/bin/devenv
 
 # A link rather than a mount: always the repo's current policy, and read-only
-# through the /devenv mount.
+# through the ~/devenv mount.
 mkdir -p /etc/claude-code
 ln -sf "$DEVENV_DIR/devcontainer/managed-settings.json" /etc/claude-code/managed-settings.json
 

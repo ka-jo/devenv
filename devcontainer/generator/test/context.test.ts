@@ -12,8 +12,7 @@ const complete = {
   home: "/home/u",
   stateDir: "/home/u/.local/state/devenv/r-main",
   claudeDataDir: "/home/u/.local/share/devenv/r-main/claude",
-  containerRepoDir: "/devenv",
-  containerClaudeDir: "/.claude",
+  containerHome: "/home/c",
   proxyNetwork: "devenv-shared_proxy_net",
   defaultConfig: "/home/u/devenv/devcontainer/default/devcontainer.json",
   featuresDir: "/home/u/devenv/devcontainer/features",
@@ -23,8 +22,24 @@ const complete = {
 };
 
 describe("parseGeneratorContext", () => {
-  test("returns every field of a complete context", () => {
-    expect(parseGeneratorContext(JSON.stringify(complete))).toEqual(complete);
+  test("returns every field of a complete context, with the container paths under the container home", () => {
+    expect(parseGeneratorContext(JSON.stringify(complete))).toEqual({
+      ...complete,
+      containerRepoDir: "/home/c/devenv",
+      containerClaudeDir: "/home/c/.claude",
+    });
+  });
+
+  test("puts the container paths at the root for a home of /, the layout of containers created before", () => {
+    const context = parseGeneratorContext(JSON.stringify({ ...complete, containerHome: "/" }));
+    expect(context.containerRepoDir).toBe("/devenv");
+    expect(context.containerClaudeDir).toBe("/.claude");
+  });
+
+  test("rejects a container home that isn't a normalized absolute path", () => {
+    for (const containerHome of ["home/c", "/home/c/", "/home//c", "/home/c/..", "/home/./c", "/home/c\nx"]) {
+      expect(() => parseGeneratorContext(JSON.stringify({ ...complete, containerHome }))).toThrow('malformed "containerHome"');
+    }
   });
 
   test("rejects text that isn't JSON", () => {

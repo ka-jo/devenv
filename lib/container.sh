@@ -3,20 +3,17 @@ SHARED_PROXY_NET="devenv-shared_proxy_net"
 # Lives inside ~/devenv, which app containers mount read-only — only the
 # approver (never an app container) writes it.
 SHARED_FIREWALL_DIR="$REPO_DIR/devcontainer/infra/firewall"
-# Where ~/devenv and ~/.claude are mounted inside every app container: fixed
-# paths, the same whatever user an image runs as. They're siblings (as on the
-# host) so the relative ~/.claude -> ../devenv/claude/... links resolve, and
-# Claude finds its config via CLAUDE_CONFIG_DIR rather than the user's home.
-# Worktrees are mounted at their mirrored path under the repo (not /workspace)
-# so the relative gitdir links written by `git worktree add --relative-paths`
-# resolve the same as on the host.
-CONTAINER_REPO_DIR="/devenv"
-CONTAINER_CLAUDE_DIR="/.claude"
-# Also hardcoded in devcontainer/features/agent/install.sh and the dashboard
-# (CONTAINER_REPO_DIR in dashboard/src/state/sources/agents.ts).
+# Inside every app container, ~/devenv and ~/.claude are mounted under the
+# container's remote user's home, whatever user the image runs as, so ~/devenv
+# paths mean the same there as on the host. They're siblings (as on the host) so
+# the relative ~/.claude -> ../devenv/claude/... links resolve. Worktrees are
+# mounted at their mirrored path under the repo (not /workspace) so the relative
+# gitdir links written by `git worktree add --relative-paths` resolve the same
+# as on the host. Where that home is comes from the built image (see
+# _container_build_and_locate_home) and is recorded in meta.json.
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/devenv"
 # Per-worktree data that outlives containers: <project>/claude is mounted
-# read-write at CONTAINER_CLAUDE_DIR, so it's agent-writable — devenv only ever
+# read-write at the container's ~/.claude, so it's agent-writable — devenv only ever
 # seeds it (_container_seed_claude_data) and deletes it (_container_remove_data),
 # never reads or runs anything from it. Kept apart from STATE_DIR, which no
 # container may ever see.
@@ -54,10 +51,15 @@ _compose_project_name() {
 }
 
 # Sets globals: CT_REPO, CT_BRANCH, CT_PATH (worktree checkout path), CT_PN (compose
-# project name), CT_WORKDIR (CT_PATH's mirrored path inside the container),
-# CT_STATE (host-only generated files, outside every container's mounts),
-# CT_CONFIG (the generated devcontainer.json the CLI runs from),
-# CT_CLAUDE_DATA (host dir mounted at CONTAINER_CLAUDE_DIR)
+# project name), CT_STATE (host-only generated files, outside every container's
+# mounts), CT_CONFIG (the generated devcontainer.json the CLI runs from),
+# CT_CLAUDE_DATA (host dir mounted at the container's ~/.claude), and the
+# container paths from _container_set_home, for the home recorded when the
+# container was created.
+#
+# A container created before devenv mounted under the user's home has no
+# recorded home; / reproduces its layout (/devenv, /.claude), so it regenerates
+# unchanged until it's rebuilt.
 _container_resolve() {
     local repo="$1" branch="$2"
     if [[ -z "$repo" || -z "$branch" ]]; then
@@ -75,10 +77,20 @@ _container_resolve() {
     CT_REPO="$repo"
     CT_BRANCH="$branch"
     CT_PN="$(_compose_project_name "$repo" "$branch")"
-    CT_WORKDIR="$CONTAINER_REPO_DIR/${CT_PATH#"$REPO_DIR/"}"
     CT_STATE="$STATE_DIR/$CT_PN"
     CT_CONFIG="$CT_STATE/.devcontainer/devcontainer.json"
     CT_CLAUDE_DATA="$DATA_DIR/$CT_PN/claude"
+    local home="/"
+    [[ -e "$CT_STATE/meta.json" ]] && home="$(jq -r '.home // "/"' "$CT_STATE/meta.json")"
+    _container_set_home "$home"
+}
+
+# Sets the container paths for a container home: CT_HOME, CT_DEVENV_DIR (where
+# ~/devenv is mounted) and CT_WORKDIR (CT_PATH's mirrored path under it).
+_container_set_home() {
+    CT_HOME="$1"
+    CT_DEVENV_DIR="${CT_HOME%/}/devenv"
+    CT_WORKDIR="$CT_DEVENV_DIR/${CT_PATH#"$REPO_DIR/"}"
 }
 
 # Opens VS Code attached to the running container for the worktree last
@@ -107,15 +119,21 @@ _open_vscode() {
 #       the worktree last used
 # Sets CT_INPUTS_HASH (identifies everything a container would be created from)
 # and CT_CREATED_HASH (the one the existing container was created from, if
-# recorded), for drift detection.
+# recorded), for drift detection, and CT_GENERATED (the full result, which
+# _container_report_generated prints).
 _container_generate() {
-    local result
-    result="$(_container_context_json "$1" "$2" | bun "$REPO_DIR/devcontainer/generator/src/cli.ts")" || exit 1
-    CT_INPUTS_HASH="$(printf '%s' "$result" | jq -r '.inputsHash')"
-    CT_CREATED_HASH="$(printf '%s' "$result" | jq -r '.createdHash // empty')"
+    CT_GENERATED="$(_container_context_json "$1" "$2" | bun "$REPO_DIR/devcontainer/generator/src/cli.ts")" || exit 1
+    CT_INPUTS_HASH="$(printf '%s' "$CT_GENERATED" | jq -r '.inputsHash')"
+    CT_CREATED_HASH="$(printf '%s' "$CT_GENERATED" | jq -r '.createdHash // empty')"
+}
+
+# Prints the notices and warnings of the last _container_generate. Separate so a
+# creation, which may generate twice (_container_build_and_locate_home), reports
+# only the final run's.
+_container_report_generated() {
     local line
-    while IFS= read -r line; do _note "$line"; done < <(printf '%s' "$result" | jq -r '.notices[]')
-    while IFS= read -r line; do _warn "$line"; done < <(printf '%s' "$result" | jq -r '.warnings[]')
+    while IFS= read -r line; do _note "$line"; done < <(printf '%s' "$CT_GENERATED" | jq -r '.notices[]')
+    while IFS= read -r line; do _warn "$line"; done < <(printf '%s' "$CT_GENERATED" | jq -r '.warnings[]')
 }
 
 # The JSON context devcontainer/generator's entry points read on stdin.
@@ -130,7 +148,7 @@ _container_context_json() {
         --arg repoDir "$REPO_DIR" --arg worktreesDir "$WORKTREES_DIR" --arg repo "$CT_REPO" \
         --arg branch "$CT_BRANCH" --arg worktreePath "$CT_PATH" --arg projectName "$CT_PN" \
         --arg home "$HOME" --arg stateDir "$CT_STATE" --arg claudeDataDir "$CT_CLAUDE_DATA" \
-        --arg containerRepoDir "$CONTAINER_REPO_DIR" --arg containerClaudeDir "$CONTAINER_CLAUDE_DIR" \
+        --arg containerHome "$CT_HOME" \
         --arg proxyNetwork "$SHARED_PROXY_NET" --arg defaultConfig "$DEFAULT_CONFIG" \
         --arg featuresDir "$DEVENV_FEATURES_DIR" --arg devcontainerCli "$DEVCONTAINER_CLI" \
         --arg trustDir "$TRUST_DIR" --arg configPath "${2:-}" \
@@ -319,9 +337,13 @@ _container_up() {
         docker compose -p "$CT_PN" stop >/dev/null
     fi
     _container_generate "$is_creating" "$config"
-    _container_seed_claude_data
     _container_ensure_volume shared-pnpm-store
     _container_ensure_volume ka-jo-zsh-history
+    if [[ "$is_creating" -eq 1 ]]; then
+        _container_build_and_locate_home
+    fi
+    _container_report_generated
+    _container_seed_claude_data
 
     # The CLI never recreates an existing container on its own, so config
     # drift is reported rather than silently applied (recreating discards
@@ -345,8 +367,44 @@ _container_up() {
     fi
     # What exec consumers (_container_exec, the dashboard) need to reach the
     # container without the compose files: who to run as.
-    printf '%s' "$result" | jq --arg container "$CT_PN-devcontainer" \
-        '{container: $container, user: .remoteUser, workdir: .remoteWorkspaceFolder}' > "$CT_STATE/meta.json"
+    printf '%s' "$result" | jq --arg container "$CT_PN-devcontainer" --arg home "$CT_HOME" \
+        '{container: $container, user: .remoteUser, workdir: .remoteWorkspaceFolder, home: $home}' > "$CT_STATE/meta.json"
+}
+
+# The mounts under the container user's home are generated before the image
+# that decides where that home is, so a creation builds the image first, reads
+# the home from it, and regenerates if it isn't the one just generated for (the
+# previous container's, or / before a first one). `up` then reuses the build's
+# cache, so this costs a cached build check and the lookup, not a second build.
+# Runs while the worktree's containers are stopped, like the generator's checks,
+# and the regeneration repeats them.
+_container_build_and_locate_home() {
+    local result image home
+    result="$(_devcontainer build)" || {
+        printf '%s\n' "$result" | jq -r '.message // .' >&2
+        exit 1
+    }
+    image="$(printf '%s' "$result" | jq -r '.imageName | if type == "array" then .[0] else . end')"
+    home="$(_image_home "$image")" || exit 1
+    if [[ "$home" != "$CT_HOME" ]]; then
+        _container_set_home "$home"
+        _container_generate 1 ""
+    fi
+}
+
+# Prints the remote user's home that devenv's agent Feature recorded in an
+# image. Copies the file out of a created, never-started container: starting one
+# would run the project's image outside the sandbox network.
+_image_home() {
+    local image="$1" container home
+    container="$(docker create --network none "$image" true)" || return 1
+    home="$(docker cp "$container:/etc/devenv/home" - | tar -xO 2>/dev/null)" || home=""
+    docker rm "$container" >/dev/null
+    if [[ -z "$home" ]]; then
+        echo "error: couldn't read /etc/devenv/home (written by devenv's agent Feature) from image $image" >&2
+        return 1
+    fi
+    printf '%s' "$home"
 }
 
 cmd_container_down() {
@@ -376,6 +434,7 @@ cmd_container_attach() {
 
     _container_resolve "$repo" "$branch"
     _container_generate
+    _container_report_generated
     if [[ "$code" -eq 1 ]]; then
         _open_vscode
     else

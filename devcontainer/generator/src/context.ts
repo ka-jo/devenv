@@ -1,8 +1,10 @@
+import path from "node:path";
 import { GeneratorError } from "./errors.ts";
 
 /**
  * Everything the generator needs to know about one worktree and the host, as
- * supplied by `lib/container.sh` (which owns these values) on stdin.
+ * supplied by `lib/container.sh` (which owns these values) on stdin — except
+ * the container paths, which are derived from {@link GeneratorContext.containerHome}.
  */
 export interface GeneratorContext {
   /** Host path of the devenv repo, `~/devenv`. */
@@ -23,9 +25,14 @@ export interface GeneratorContext {
   readonly stateDir: string;
   /** Host directory mounted read-write at {@link GeneratorContext.containerClaudeDir}. */
   readonly claudeDataDir: string;
-  /** Where {@link GeneratorContext.repoDir} is mounted inside the container. */
+  /**
+   * The container's remote user's home directory, read from the built image. `/` is the layout of containers created
+   * before devenv mounted under the user's home (`/devenv`, `/.claude`), and what's used before an image exists.
+   */
+  readonly containerHome: string;
+  /** Where {@link GeneratorContext.repoDir} is mounted inside the container: `<containerHome>/devenv`. */
   readonly containerRepoDir: string;
-  /** Claude Code's `CLAUDE_CONFIG_DIR` inside the container. */
+  /** Claude Code's `CLAUDE_CONFIG_DIR` inside the container: `<containerHome>/.claude`, beside the repo as on the host. */
   readonly containerClaudeDir: string;
   /** Docker name of the shared stack's internal proxy network. */
   readonly proxyNetwork: string;
@@ -48,7 +55,9 @@ export interface GeneratorContext {
 
 /**
  * Parses the JSON context `lib/container.sh` sends, checking every required {@link GeneratorContext} field is present:
- * paths and names as non-empty strings, flags as booleans. An optional field may be absent or empty.
+ * paths and names as non-empty strings, flags as booleans, and the container home as a normalized absolute path (it
+ * comes from the image, which the project controls). An optional field may be absent or empty. The container paths
+ * are derived, not read.
  *
  * @param json - The raw JSON text.
  * @returns The validated context.
@@ -79,6 +88,10 @@ export function parseGeneratorContext(json: string): GeneratorContext {
     }
     return value;
   };
+  const containerHome = field("containerHome");
+  if (!isNormalizedAbsolute(containerHome)) {
+    throw new GeneratorError(`generator context has a malformed "containerHome": ${JSON.stringify(containerHome)}`);
+  }
 
   return {
     repoDir: field("repoDir"),
@@ -90,8 +103,9 @@ export function parseGeneratorContext(json: string): GeneratorContext {
     home: field("home"),
     stateDir: field("stateDir"),
     claudeDataDir: field("claudeDataDir"),
-    containerRepoDir: field("containerRepoDir"),
-    containerClaudeDir: field("containerClaudeDir"),
+    containerHome,
+    containerRepoDir: path.posix.join(containerHome, "devenv"),
+    containerClaudeDir: path.posix.join(containerHome, ".claude"),
     proxyNetwork: field("proxyNetwork"),
     defaultConfig: field("defaultConfig"),
     featuresDir: field("featuresDir"),
@@ -100,4 +114,14 @@ export function parseGeneratorContext(json: string): GeneratorContext {
     ...(typeof record.configPath === "string" && record.configPath !== "" ? { configPath: record.configPath } : {}),
     isCreating: flag("isCreating"),
   };
+}
+
+/** Whether a path is absolute and already in normal form: no `.`/`..` segments, repeated or trailing slashes, or control characters. */
+function isNormalizedAbsolute(candidate: string): boolean {
+  return (
+    path.posix.isAbsolute(candidate) &&
+    path.posix.normalize(candidate) === candidate &&
+    (candidate === "/" || !candidate.endsWith("/")) &&
+    !/[\u0000-\u001f\u007f]/.test(candidate)
+  );
 }

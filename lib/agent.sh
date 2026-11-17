@@ -30,14 +30,10 @@ _agent_resolve_running() {
 
 # Runs claude (via claude-wrapper, for its per-session proxy credentials) in
 # the worktree container last resolved. Pass --tty first for interactive use.
-#
-# The wrapper path is built here rather than in a top-level variable:
-# bin/devenv sources lib/*.sh alphabetically, so CONTAINER_REPO_DIR
-# (lib/container.sh) isn't set yet when this file's top level runs.
 _agent_claude() {
     local tty=()
     [[ "${1:-}" == --tty ]] && { tty=(--tty); shift; }
-    _container_exec "${tty[@]}" "$CONTAINER_REPO_DIR/bin/claude-wrapper" "$@"
+    _container_exec "${tty[@]}" "$CT_DEVENV_DIR/bin/claude-wrapper" "$@"
 }
 
 # Prints `claude agents --json --all --cwd <workdir>` for the worktree

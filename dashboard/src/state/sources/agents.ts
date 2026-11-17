@@ -1,10 +1,5 @@
 import os from "node:os";
 import path from "node:path";
-import { REPO_DIR } from "../../lib/paths.ts";
-
-/** Where {@link REPO_DIR} is mounted inside every worktree's container. */
-const CONTAINER_REPO_DIR = "/devenv";
-
 /** Host-only per-worktree state written by `devenv container up` (STATE_DIR in lib/container.sh). */
 const STATE_DIR = path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local/state"), "devenv");
 
@@ -40,17 +35,15 @@ const AGENT_STATES: ReadonlySet<string> = new Set<AgentState>(["working", "block
 /**
  * Lists running/recent background Claude Code agents in a worktree's container.
  * @param projectName - Compose project name from `composeProjectName` (identifiers.ts).
- * @param worktreePath - Absolute path to the worktree checkout.
  * @returns Background agent sessions, or `[]` if the list couldn't be read.
  */
-export async function listBackgroundAgents(
-  projectName: string,
-  worktreePath: string,
-): Promise<AgentInfo[]> {
-  // Mirrors CT_WORKDIR (lib/container.sh): worktrees are mounted at their
-  // ~/devenv-relative path under CONTAINER_REPO_DIR, not /workspace.
-  const workdir = path.posix.join(CONTAINER_REPO_DIR, path.relative(REPO_DIR, worktreePath));
-  const user = await readContainerUser(projectName);
+export async function listBackgroundAgents(projectName: string): Promise<AgentInfo[]> {
+  const { user, workdir } = await readContainerMeta(projectName);
+  // Where the worktree is in the container depends on the container user's home, so without a recorded workdir there's
+  // nowhere to look.
+  if (workdir === undefined) {
+    return [];
+  }
   const proc = Bun.spawn(
     [
       "docker",
@@ -88,20 +81,32 @@ export async function listBackgroundAgents(
   }
 }
 
-/**
- * Reads the user `devenv container up` recorded for a worktree's container in its meta.json, or `undefined` if none was
- * recorded yet — `docker exec` then falls back to the image's default user.
- */
-async function readContainerUser(projectName: string): Promise<string | undefined> {
+/** What `devenv container up` records about a worktree's container in its meta.json. */
+interface ContainerMeta {
+  /** The remote user; without it `docker exec` falls back to the image's default user. */
+  readonly user: string | undefined;
+  /** The worktree's path inside the container. */
+  readonly workdir: string | undefined;
+}
+
+/** Reads a worktree container's meta.json; a missing or malformed file, or field, reads as `undefined`. */
+async function readContainerMeta(projectName: string): Promise<ContainerMeta> {
+  let meta: unknown;
   try {
-    const meta: unknown = await Bun.file(path.join(STATE_DIR, projectName, "meta.json")).json();
-    if (typeof meta === "object" && meta !== null && "user" in meta && typeof meta.user === "string") {
-      return meta.user;
-    }
+    meta = await Bun.file(path.join(STATE_DIR, projectName, "meta.json")).json();
   } catch {
-    // Missing or malformed meta.json gets the same fallback as no recorded user.
+    meta = undefined;
   }
-  return undefined;
+  return { user: stringFieldOf(meta, "user"), workdir: stringFieldOf(meta, "workdir") };
+}
+
+/** A string-valued field of a parsed JSON value. */
+function stringFieldOf(value: unknown, key: string): string | undefined {
+  if (typeof value !== "object" || value === null || !(key in value)) {
+    return undefined;
+  }
+  const field: unknown = Reflect.get(value, key);
+  return typeof field === "string" ? field : undefined;
 }
 
 /** Converts one raw `claude agents --json` background entry into an {@link AgentInfo}, or `undefined` if required fields are missing/malformed. */

@@ -156,7 +156,7 @@ function agentLayer(
       // From the host's own Claude config, only auth (read-write, for token refresh) and settings.json (read-only).
       // Everything else in ~/.claude and ~/.claude.json steers the HOST's Claude — settings hooks and mcpServers are
       // commands it runs, skills/commands/rules/CLAUDE.md are instructions it follows — so a writable mount of any of
-      // it is a way out of the sandbox. The repo-tracked config is linked from the read-only /devenv instead, by the
+      // it is a way out of the sandbox. The repo-tracked config is linked from the read-only repo mount instead, by the
       // agent Feature's postStartCommand (`devenv link`).
       hostClaudeMount(context, ".credentials.json", false),
       hostClaudeMount(context, "settings.json", true),

@@ -89,7 +89,7 @@ async function refresh(): Promise<void> {
                 if (containers.get(projectName)?.status !== "running") {
                     return;
                 }
-                agentsByProject.set(projectName, await listBackgroundAgents(projectName, worktree.path));
+                agentsByProject.set(projectName, await listBackgroundAgents(projectName));
             }),
         );
 
