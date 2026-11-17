@@ -57,7 +57,7 @@ Don't extract everything upfront — the draft is the conversation.
 
 Read `format-rules.md` before drafting. The Decision and Confirmation sections have the most non-obvious conventions.
 
-Create `docs/adrs/<NNNN>-<kebab-title>.md`. Follow `template.md` exactly and `format-rules.md` for section content. Default `status: Proposed` and `date` to today. Never set `Accepted` — that promotion is the human's.
+Create `docs/adrs/<NNNN>-<kebab-title>.md`. Follow `template.md` exactly and `format-rules.md` for section content. Default `status: Proposed` and `date` to today (a retroactive ADR takes its commit's date instead; see `format-rules.md` § "Retroactive ADRs"). Never set `Accepted` — that promotion is the human's.
 
 When superseding, start from the old ADR's Decision and restate every clause that still holds. Anything not restated is no longer in force.
 
@@ -76,7 +76,7 @@ When the review raises nothing further and no questions remain open, ask whether
 
 When the user accepts a Proposed ADR, apply all of these in one change:
 
-1. Set its `status: Accepted` and `date` to the acceptance date.
+1. Set its `status: Accepted` and `date` to the acceptance date. A retroactive ADR keeps its commit's date.
 2. Retire each ADR in its `supersedes` (step 7).
 3. Regenerate the index: `~/.claude/skills/create-adr/build-index.sh docs/adrs` (the path resolves in containers too).
 4. Check `CLAUDE.md` for distilled content that the accepted or superseded ADRs affect, and propose updates to the user.

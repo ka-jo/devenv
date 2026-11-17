@@ -38,7 +38,7 @@ see_also:            # optional
 - **adr**: Four-digit zero-padded number, matching the filename prefix.
 - **title**: The decision itself, phrased as a rule ("Route all data access through the service layer"), not a topic ("Data access"). The generated index lists titles only, so the title must carry the decision on its own. Mirrors the H1. Single-line; quote it if it contains `: ` or ` #`.
 - **status**: See "Lifecycle and editing".
-- **date**: The decision date — when the ADR was accepted. While Proposed, the date drafted. Unlike RFCs, an ADR is a point-in-time record, so the date belongs in the document rather than only in git.
+- **date**: The decision date — when the ADR was accepted. While Proposed, the date drafted. A retroactive ADR instead takes the date of the commit that established the decision, from drafting on (see "Retroactive ADRs"). Unlike RFCs, an ADR is a point-in-time record, so the date belongs in the document rather than only in git.
 - **supersedes**: ADRs this one replaces in full. Present only when non-empty.
 - **superseded_by**: Added to an ADR when a superseding ADR is accepted. Present only on Superseded ADRs.
 - **see_also**: Related ADRs (`ADR-NNNN`), RFCs (`RFC-NNNN`), standards, or documents (repo-relative path or URL) with no claim about the relationship. Explain any precise relationship in the body.
@@ -66,6 +66,16 @@ Separately, because an ADR is a point-in-time record, Context and Rationale are 
 **Deprecated**: No longer applies, with no replacement. For example, the subsystem it governed was removed. Excluded from the index, and frozen like a Superseded ADR.
 
 This differs from RFCs on purpose. An RFC describes the current system and is amended in place. An ADR records a decision made at a point in time and is replaced, not amended.
+
+## Retroactive ADRs
+
+A retroactive ADR records a decision the codebase already follows. Write it as if at the time of the decision, not as a description of today:
+
+- **date** is the date of the commit that established the decision's _current_ form, not its first appearance and not the drafting or acceptance date. If the decision changed shape later (a mechanism replaced, a scope widened), the date is that later commit. Acceptance doesn't change it.
+- **Context** describes the world as of that commit, from facts available then (the code, commit messages, issues at that point). Later developments don't belong; if they matter enough, they're the Context of a superseding ADR.
+- **Alternatives** come from the history: earlier forms of the decision that a commit replaced are genuinely considered options, and the commit body that replaced them often holds the decisive reason. Where the history shows no alternative, ask the user rather than infer one. If none was considered, say so.
+- **Confirmation** lists today's artifacts, as with any ADR: it's a map to current enforcement, not a point-in-time record.
+- Record only the current form. Earlier forms are Alternatives in this ADR, not Superseded ADRs of their own, unless the user asks for the full chain.
 
 ## Decision
 

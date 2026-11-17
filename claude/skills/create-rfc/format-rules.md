@@ -144,6 +144,37 @@ interface ExampleViewEmits {} // none
 
 Keep both interfaces under one component subsection (group by type, not by kind); non-interface facts (route name, what it renders) stay in the subsection's prose.
 
+### CLI interfaces
+
+A command is a §3 member like any type: one subsection per command or subcommand, headed by its full invocation (`### 3.4. \`devenv container up\``). The subsection holds the command's shape only:
+
+1. A usage synopsis in a `text` fence, in the conventional notation: `[...]` optional, `<name>` placeholder, `a|b` alternatives, `...` repeatable.
+2. Its arguments and options, each saying what the value _is_ (`--config <path>`: a `devcontainer.json`, or a folder holding one), never what the command does with it. Alternate spellings (`--config=<path>`) are listed here.
+3. One line of outputs: what it prints on stdout, the diagnostics it can emit, and the §3 data types it reads or writes — the command's equivalent of a return type.
+4. The environment variables it reads, when they change its behavior. Variables several commands share get one subsection of their own.
+
+Everything the command does — how arguments resolve, defaults, prompts, side effects — is behavior and lives in §4, with the command as the EARS subject (`` `devenv container up` SHALL … ``). Don't add a description column or man-page-style OPTIONS prose: it becomes a second, unstructured copy of §4 that drifts from it.
+
+Don't model a command as a TypeScript interface (`interface ContainerUpArgs { … }`) unless that type exists in the code. An invented type is the same arbitrariness as an invented EARS subject, and TypeScript can't express positional vs. flag arguments or `--opt=value` vs. `--opt value`. Data that crosses the process boundary as JSON (files a command writes, stdin/stdout payloads) is real interface and stays a `typescript` fence.
+
+Order follows the usual rule: the data types commands read and write first, then diagnostics in place of error types (stderr message forms and exit statuses, as the code produces them — don't specify finer-grained exit codes than exist), then the commands.
+
+````
+### 3.4. `devenv container up`
+
+```text
+devenv container up [<repo> <branch>] [--rebuild] [--config <path>] [--code]
+```
+
+- `<repo> <branch>`: a worktree, `worktrees/<repo>/<branch>`.
+- `--config <path>`, `--config=<path>`: a `devcontainer.json`, or a folder holding one.
+- `--rebuild`, `--code`: switches.
+
+Outputs: stdout `up: <project>`; diagnostics (§3.1); writes `MetaJson` (§3.2).
+````
+
+Augmentation works unchanged: a `diff` fence over the synopsis, `(extends RFC-XXXX §X.Y)` in the heading, and the "Members not listed above are unchanged" line covering the argument list.
+
 ## Section 4: Behavior
 
 This is the most important section. It contains the behavioral contract that agents implement against.
