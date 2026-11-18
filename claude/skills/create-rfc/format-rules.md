@@ -216,16 +216,15 @@ Use a note sparingly, for two cases only: a clarifying implication of an existin
 
 **Hard rule**: a note MUST NEVER be the sole place a requirement lives. If removing it would silently drop a testable obligation, express that as a `SHALL`/`SHOULD` instead — notes explain, they don't obligate.
 
-Use the docs site's admonition/container syntax (VitePress shown here) instead of inline "Note: ..." prose, so asides stay visually distinct from the EARS contract:
+Use GitHub's alert syntax instead of inline "Note: ..." prose, so asides stay visually distinct from the EARS contract:
 
 ```markdown
-::: info
-150ms is Vuetify's `dialog-transition-leave-active` duration (125ms, per
-ADR-0006) plus a small scheduling margin.
-:::
+> [!NOTE]
+> 150ms is Vuetify's `dialog-transition-leave-active` duration (125ms, per
+> ADR-0006) plus a small scheduling margin.
 ```
 
-Use an info-level container for clarifying context and a warning-level one for an easy-to-miss consequence. (VitePress's `::: tip`/`::: danger` also exist but are rarely needed here.)
+Use `[!NOTE]` for clarifying context and `[!WARNING]` for an easy-to-miss consequence. (`[!TIP]`, `[!IMPORTANT]` and `[!CAUTION]` also exist but are rarely needed here.) Alerts render on GitHub and in VitePress, and degrade to a plain blockquote elsewhere. Don't use VitePress's `::: info` containers even in a VitePress project: outside the docs site they show as literal text.
 
 **Smell to watch for**: a note that, if deleted, would leave a testable obligation nowhere else in the document — that's a requirement wearing a note as a disguise.
 
@@ -363,4 +362,4 @@ If there are no open questions during drafting, delete the section entirely rath
 - **Invariant-only Behavior sections**: An §4 that contains only an Invariants subsection and no per-operation behavior is usually a sign that per-operation requirements were skipped. Surface this for the user to confirm.
 - **Multiple unrelated `SHALL`s under one anchor**: a subsection bundling distinct triggers or responses lets a per-section coverage mark hide untested behaviors. Default to one `SHALL` per leaf; the only exceptions are effects that only make sense together, or a small set of `SHALL`s covering every value of one input (kept together on purpose).
 - **Behavior grouping forced to mirror Interface**: §4 organizes by mental model, not by interface shape. Don't force a per-operation grouping if the natural mental model is by state, phase, or concern. Significant divergence from §3 structure is worth examining but isn't forbidden.
-- **Bare "Note: ..." prose instead of an admonition container**: a plain paragraph starting with "Note:" sitting inline next to EARS statements is easy to mistake for normative text, or can accidentally hide normative content that should have been a `SHALL`. Use an admonition container (e.g., `::: info` / `::: warning`) instead.
+- **Bare "Note: ..." prose instead of an alert**: a plain paragraph starting with "Note:" sitting inline next to EARS statements is easy to mistake for normative text, or can accidentally hide normative content that should have been a `SHALL`. Use an alert (`> [!NOTE]` / `> [!WARNING]`) instead.
