@@ -55,7 +55,7 @@ Enable bypass through the dev container's VS Code customizations: `claudeCode.al
 
 - `devcontainer/managed-settings.json` (Claude Code managed settings): sets `permissions.defaultMode: bypassPermissions` and `skipDangerousModePermissionPrompt`. Managed settings outrank IDE, user and project settings, so every session gets them.
 - `devcontainer/features/agent/install.sh` (image build): links `/etc/claude-code/managed-settings.json` to that file under the read-only `~/devenv` mount, in every image devenv builds.
-- `devcontainer/generator/src/config.ts` (`deriveGeneratedConfig`): adds the `agent` Feature to every generated config, the default and project configs alike.
+- `devcontainer/generator/src/config.ts` (`deriveGeneratedConfig`): adds the `agent` Feature to every generated config, whatever config it was generated from.
 - `devcontainer/generator/test/config.test.ts` (spec): asserts the `agent` Feature is injected; catches a config that would skip it.
 - `lib/container.sh` (`_container_seed_claude_data`): seeds each worktree's `.claude.json` with onboarding completed and the worktree trusted, so Claude Code's first-run screens don't stop the first session.
 - Not covered: a Feature that a project config installs after `agent` could replace `/etc/claude-code/managed-settings.json`, and nothing checks for that. Nothing checks that every way of starting a session ends up without prompts.

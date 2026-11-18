@@ -14,7 +14,7 @@ see_also:
 ## Decision
 
 1. A sandbox's environment MUST be defined by a config in the Development Container Specification's format, and devenv MUST build and run it with an implementation of that specification rather than interpreting configs itself.
-2. A project MAY supply its own config to shape its sandboxes for its own needs. devenv provides a default for projects that don't.
+2. A project MAY supply its own config to shape its sandboxes for its own needs.
 3. What devenv requires of every sandbox, its limits under [ADR-0001](0001-run-agents-in-a-sandbox-that-limits-what-they-can-reach.md) and its agent tooling, MUST be applied by devenv on top of whichever config is used, never required to be written into the config.
 4. devenv SHOULD NOT add a convention of its own for anything the specification can already express.
 
@@ -53,8 +53,7 @@ devenv's own Compose file and Dockerfile, run directly with `docker compose` (02
 
 - `package.json` (root devDependency): pins `@devcontainers/cli`, the engine every sandbox is built and run with.
 - `lib/container.sh` (`_devcontainer`): runs that CLI for every build, start and exec.
-- `devcontainer/generator/src/source.ts` (`resolveSourceConfig`): uses a project's own `.devcontainer/devcontainer.json` or `.devcontainer.json` when it has one, otherwise devenv's default; `--config` picks any other.
-- `devcontainer/default/devcontainer.json` (default config): a plain specification config for projects without their own.
+- `devcontainer/generator/src/source.ts` (`resolveSourceConfig`): uses a project's own `.devcontainer/devcontainer.json` or `.devcontainer.json` when it has one; `--config` picks any other.
 - `devcontainer/generator/src/config.ts` (`deriveGeneratedConfig`) and `devcontainer/generator/src/override.ts` (`buildOverride`): add devenv's agent Feature and apply its limits on top of the config, without requiring anything of it.
 - `devcontainer/generator/test/config.test.ts`, `devcontainer/generator/test/override.test.ts` (specs): pin what's added on top of a config.
 - Not covered: image- and Dockerfile-based configs, which `deriveGeneratedConfig` rejects. Nothing checks that devenv adds no convention the specification already covers.
