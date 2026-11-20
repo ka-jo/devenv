@@ -355,7 +355,7 @@ _container_up() {
         _warn "config changed since this container was created; run 'devenv container up $CT_REPO $CT_BRANCH --rebuild' (or down/up) to apply it"
     fi
     result="$(_devcontainer up "${up_args[@]}")" || {
-        printf '%s\n' "$result" | jq -r '.message // .' >&2
+        printf 'error: %s\n' "$(printf '%s\n' "$result" | jq -r '.message // .')" >&2
         exit 1
     }
     # Recorded only once the container exists: if a rebuild fails while the old
@@ -381,7 +381,7 @@ _container_up() {
 _container_build_and_locate_home() {
     local result image home
     result="$(_devcontainer build)" || {
-        printf '%s\n' "$result" | jq -r '.message // .' >&2
+        printf 'error: %s\n' "$(printf '%s\n' "$result" | jq -r '.message // .')" >&2
         exit 1
     }
     image="$(printf '%s' "$result" | jq -r '.imageName | if type == "array" then .[0] else . end')"
