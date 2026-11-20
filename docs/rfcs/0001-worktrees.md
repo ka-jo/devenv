@@ -21,12 +21,13 @@ Every repository devenv works on is a bare clone that devenv holds itself, with 
 
 Prior to this RFC, these commands differed from what is specified here:
 
-- `devenv worktree rm` removed the worktree and its sandbox's data before deleting the branch, so a branch that wasn't fully merged left the command failed halfway, with the worktree already gone and the branch still there (§4.4.3).
-- `devenv worktree rm` left the worktree's sandbox behind: its containers and its generated state (§4.4.4).
+- `devenv worktree rm` removed the worktree and its sandbox's data before deleting the branch, so a branch that wasn't fully merged left the command failed halfway, with the worktree already gone and the branch still there (§4.4).
+- `devenv worktree rm` left the worktree's sandbox behind: its containers and its generated state (§4.4.1, §4.4.3, §4.4.4).
 - `devenv worktree rm` deleted the repository's default branch along with its worktree, after which adding a new branch without a base failed (§4.4.5).
 - `devenv worktree list` printed `git worktree list`'s own output, bare repositories included (§4.5).
 - `devenv clone` and `devenv worktree` printed errors on stdout (§4.1.1).
-- A `devenv clone` that failed left an empty folder behind, so trying again reported that the repository already existed (§4.2.4).
+- A `devenv clone` that failed left an empty folder behind, so trying again reported that the repository already existed (§4.2.5).
+- Nothing stopped `devenv clone` or `devenv worktree add` from creating a worktree whose sandbox name another worktree already had (§4.1.4).
 
 ## 3. Interface
 
@@ -101,99 +102,153 @@ Outputs: stdout one line per worktree, `<repo>\t<branch>\t<path>`; diagnostics (
 
 ### 4.1. Invariants
 
-These requirements apply to every command in §4.2 through §4.5.
+These requirements apply to every command in §4.2 through §4.6. A command is _creating a worktree_ while `devenv clone` checks out the default branch (§4.2.3) and while `devenv worktree add` checks out `<branch>` (§4.3).
 
 #### 4.1.1. Failure
 
-WHEN a command fails, it SHALL print `error: <message>` on stderr AND SHALL exit with status `1`.
+Wherever a requirement says a command SHALL fail, the command SHALL print `error: <message>` on stderr AND SHALL exit with status `1`.
 
 #### 4.1.2. Missing arguments
 
-WHEN a command is run without arguments it requires, and §4.4.1 doesn't apply, it SHALL print its usage line on stderr AND SHALL exit with status `1`, without changing anything.
+IF an argument a command requires is omitted, THEN the command SHALL print its usage line on stderr AND SHALL exit with status `1` AND SHALL change nothing.
 
 #### 4.1.3. Relative links
 
-WHEN a command creates a worktree, it SHALL create it with relative links between the worktree and its bare clone (`--relative-paths`), so they resolve the same way inside a sandbox ([ADR-0008](../adrs/0008-mirror-the-hosts-paths-in-every-sandbox.md)).
+A command SHALL create every worktree with relative links between the worktree and its bare clone (`--relative-paths`), so they resolve the same way inside a sandbox ([ADR-0008](../adrs/0008-mirror-the-hosts-paths-in-every-sandbox.md)).
+
+#### 4.1.4. Sandbox name collisions
+
+WHILE a command is creating a worktree and another worktree, of any repository, already has the sandbox name (RFC-0002 §3.2) the new one would have, the command SHALL fail AND SHALL leave behind nothing it created. Its error message MUST name the existing worktree, as `<repo>/<branch>`. It MUST name the sandbox name the two would share.
+
+> [!NOTE]
+> Two worktrees with the same sandbox name would share one sandbox, breaking [ADR-0007](../adrs/0007-give-each-worktree-one-sandbox-shared-by-every-agent-working-in-it.md). The sandbox name drops characters such as `/` and `.`, so `feature/x` and `feature-x` collide, and so can a new repository's name with an existing repository's branch (`app-feature` + `x` and `app` + `feature-x`). `devenv clone` creates the default branch's worktree, so the check covers it too.
 
 ### 4.2. Cloning a repository
 
 #### 4.2.1. Name
 
-WHEN `<name>` is omitted, `devenv clone` SHALL use the last segment of `<url>`'s path, without a trailing `.git`.
+WHEN `<name>` is omitted, `devenv clone` SHALL use the last segment of `<url>`'s path, without a trailing `.git`, as the repository's name.
 
 #### 4.2.2. Bare clone
 
-WHEN `devenv clone` clones a repository, it SHALL clone it as a bare repository at `worktrees/<name>/.git` AND SHALL configure it to fetch every branch of `origin` into `refs/remotes/origin/*` and fetch them, so the remote's branches are known and tracked.
+`devenv clone` SHALL clone the repository as a bare repository at `worktrees/<name>/.git`, AND SHALL configure it to fetch every branch of `origin` into `refs/remotes/origin/*`, AND SHALL fetch them, so the remote's branches are known and tracked.
 
 > [!NOTE]
 > A bare clone leaves `remote.origin.fetch` unset, so without this, fetching would only ever update `FETCH_HEAD`.
 
 #### 4.2.3. Default branch
 
-WHEN `devenv clone` has cloned a repository, it SHALL check out the remote's default branch as an ordinary worktree at `worktrees/<name>/<default-branch>`.
+`devenv clone` SHALL check out the remote's default branch as an ordinary worktree at `worktrees/<name>/<default-branch>` after fetching.
 
-#### 4.2.4. Existing or failed target
+#### 4.2.4. Existing target
 
-IF `worktrees/<name>` already exists, THEN `devenv clone` SHALL fail without changing it. IF cloning or fetching fails, THEN `devenv clone` SHALL fail AND SHALL leave no `worktrees/<name>` behind.
+WHILE `worktrees/<name>` exists, `devenv clone` SHALL fail without changing anything. Its error message MUST name the existing path.
+
+#### 4.2.5. Failed clone
+
+IF cloning fails, THEN `devenv clone` SHALL fail AND SHALL leave no `worktrees/<name>` behind.
+
+IF fetching fails, THEN `devenv clone` SHALL fail AND SHALL leave no `worktrees/<name>` behind.
+
+#### 4.2.6. Success
+
+`devenv clone` SHALL print `cloned <name> -> <path>` on stdout as its last step, where `<path>` is the default branch's worktree.
 
 ### 4.3. Adding a worktree
 
 #### 4.3.1. Unknown repository
 
-IF `<repo>` has no bare clone in `worktrees/`, THEN `devenv worktree add` SHALL fail, naming `devenv clone` as the way to add it.
+IF `<repo>` names a repository with no bare clone in `worktrees/`, THEN `devenv worktree add` SHALL fail without changing anything. Its error message MUST name `devenv clone <url> <repo>` as the way to add the repository.
 
 #### 4.3.2. Existing branch
 
-WHEN `<branch>` exists as a local branch, or only on the remote as `origin/<branch>`, `devenv worktree add` SHALL check it out at `worktrees/<repo>/<branch>`, creating a local branch that tracks `origin/<branch>` in the latter case. `<base>` SHALL be ignored.
+WHILE `<branch>` exists as a local branch, `devenv worktree add` SHALL check the branch out at `worktrees/<repo>/<branch>` AND SHALL ignore `<base>`.
+
+WHILE `<branch>` exists only on the remote, as `origin/<branch>`, `devenv worktree add` SHALL create a local branch that tracks `origin/<branch>`, AND SHALL check it out at `worktrees/<repo>/<branch>`, AND SHALL ignore `<base>`.
 
 #### 4.3.3. New branch
 
-WHEN `<branch>` exists neither locally nor on the remote, `devenv worktree add` SHALL create it from `<base>`, or from the repository's default branch when `<base>` is omitted, AND SHALL check it out at `worktrees/<repo>/<branch>`.
+WHILE `<branch>` exists neither locally nor on the remote, WHEN `<base>` is given, `devenv worktree add` SHALL create the branch from `<base>` AND SHALL check it out at `worktrees/<repo>/<branch>`.
+
+WHILE `<branch>` exists neither locally nor on the remote, WHEN `<base>` is omitted, `devenv worktree add` SHALL create the branch from the repository's default branch AND SHALL check it out at `worktrees/<repo>/<branch>`.
 
 #### 4.3.4. Branch already checked out
 
-IF `<branch>` is already checked out in another worktree, THEN `devenv worktree add` SHALL fail without creating anything.
+WHILE `<branch>` is checked out in another worktree, `devenv worktree add` SHALL fail without creating anything. Its error message MUST name the worktree that has the branch checked out.
+
+#### 4.3.5. Success
+
+`devenv worktree add` SHALL print `worktree ready: <path>` on stdout as its last step.
 
 ### 4.4. Removing a worktree
 
-`devenv worktree rm` removes a worktree together with everything devenv keeps for it. It checks everything that could stop it before removing anything, so it either removes all of it or changes nothing.
+`devenv worktree rm` removes a worktree together with everything devenv keeps for it, and checks everything that could stop it (§4.4.1, §4.4.2) before removing anything. It is _removing_ the worktree while none of those checks stops it, and whenever `--force` is given.
 
-#### 4.4.1. Picking a worktree
+#### 4.4.1. Running sandbox
 
-WHEN `<repo>` and `<branch>` are omitted, `devenv worktree rm` SHALL offer an interactive picker over every worktree of every repository. IF `fzf` isn't installed, THEN it SHALL fail, saying to pass `<repo> <branch>` or install `fzf`. IF the picker is cancelled, THEN it SHALL exit with status `1` without changing anything.
+WHILE the worktree's sandbox is running, WHEN `--force` is omitted, `devenv worktree rm` SHALL fail without changing anything. Its error message MUST name `devenv container down <repo> <branch>` as the way to stop the sandbox. It MUST name `--force` as the way to stop it and remove the worktree anyway.
 
-#### 4.4.2. Running sandbox
+#### 4.4.2. Uncommitted or unmerged work
 
-IF the worktree's sandbox is running and `--force` isn't given, THEN `devenv worktree rm` SHALL fail without changing anything, naming `devenv container down <repo> <branch>` as the way to stop it.
+WHILE the worktree has uncommitted changes or untracked files, as `git worktree remove` judges them, WHEN `--force` is omitted, `devenv worktree rm` SHALL fail without changing anything. Its error message MUST say that the worktree has uncommitted changes or untracked files. It MUST name `--force` as the way to remove the worktree anyway.
 
-#### 4.4.3. Uncommitted or unmerged work
+WHILE the worktree's branch isn't fully merged, as `git branch -d` judges it, WHEN `--force` is omitted, `devenv worktree rm` SHALL fail without changing anything. Its error message MUST say that the branch isn't fully merged. It MUST name `--force` as the way to remove the worktree anyway.
 
-IF the worktree has uncommitted changes or untracked files, as `git worktree remove` judges them, or its branch isn't fully merged, as `git branch -d` judges it, and `--force` isn't given, THEN `devenv worktree rm` SHALL fail without changing anything.
+#### 4.4.3. Removing the sandbox
 
-#### 4.4.4. Removal
+WHILE `devenv worktree rm` is removing the worktree and the worktree has a sandbox, `devenv worktree rm` SHALL remove the sandbox's containers and networks, as `devenv container down` does (RFC-0002 §4.4.1), before removing anything else, AND SHALL print `removed sandbox: <repo>/<branch>` on stdout.
 
-WHEN nothing in §4.4.2 or §4.4.3 stops it, `devenv worktree rm` SHALL stop and remove the worktree's sandbox if it has one, as `devenv container down` does (RFC-0002), AND SHALL remove the sandbox's generated state and its Claude Code data, AND SHALL remove the worktree, AND SHALL delete its branch, AND SHALL remove any folders the removal left empty under `worktrees/<repo>/`.
+#### 4.4.4. Removing the worktree
 
-#### 4.4.5. Default branch
+WHILE `devenv worktree rm` is removing the worktree, `devenv worktree rm` SHALL remove its sandbox's generated state and Claude Code data (RFC-0002 §3.3), AND SHALL remove the worktree, AND SHALL remove any folders the removal left empty under `worktrees/<repo>/`, AND SHALL print `removed: <path>` on stdout.
 
-WHEN the worktree being removed has the repository's default branch checked out, `devenv worktree rm` SHALL remove the worktree but SHALL NOT delete the branch.
+#### 4.4.5. The branch
+
+WHILE `devenv worktree rm` is removing the worktree and its branch isn't the repository's default branch, `devenv worktree rm` SHALL delete the branch AND SHALL print `deleted branch: <branch>` on stdout.
+
+WHILE `devenv worktree rm` is removing the worktree and its branch is the repository's default branch, `devenv worktree rm` SHALL NOT delete the branch.
 
 > [!NOTE]
 > The bare clone's `HEAD` names the default branch. Deleting it would leave `HEAD` naming a branch that doesn't exist, and §4.3.3 creates new branches from it.
 
 #### 4.4.6. Force
 
-WHEN `--force` is given, `devenv worktree rm` SHALL proceed past §4.4.2 and §4.4.3: it stops a running sandbox, discards uncommitted changes, and deletes a branch that isn't fully merged. §4.4.5 still applies.
+WHEN `--force` is given, `devenv worktree rm` SHALL remove the worktree as §4.4.3 through §4.4.5 specify, even while its sandbox is running, it has uncommitted changes or untracked files, or its branch isn't fully merged.
+
+> [!NOTE]
+> So `--force` stops a running sandbox, discards uncommitted changes and untracked files, and deletes a branch that isn't fully merged. It never deletes the default branch.
 
 ### 4.5. Listing worktrees
 
 #### 4.5.1. Every worktree
 
-WHEN `<repo>` is omitted, `devenv worktree list` SHALL print one line per worktree of every repository, `<repo>\t<branch>\t<path>`, sorted by repository and then branch, with no line for the bare clones themselves.
+WHEN `<repo>` is omitted, `devenv worktree list` SHALL print one line per worktree of every repository, `<repo>\t<branch>\t<path>`, AND SHALL print no line for the bare clones themselves.
 
 #### 4.5.2. One repository
 
-WHEN `<repo>` is given, `devenv worktree list` SHALL print only that repository's lines. IF `<repo>` has no bare clone in `worktrees/`, THEN it SHALL fail.
+WHEN `<repo>` is given, `devenv worktree list` SHALL print only that repository's lines.
+
+#### 4.5.3. Unknown repository
+
+IF `<repo>` names a repository with no bare clone in `worktrees/`, THEN `devenv worktree list` SHALL fail. Its error message MUST name the repository.
+
+#### 4.5.4. Order
+
+`devenv worktree list` SHALL print its lines sorted by repository and then by branch.
+
+### 4.6. Choosing a worktree interactively
+
+#### 4.6.1. The picker
+
+WHEN `<repo>` and `<branch>` are omitted, `devenv worktree rm` SHALL offer an interactive picker over every worktree of every repository.
+
+#### 4.6.2. No `fzf`
+
+WHILE `fzf` isn't installed, WHEN `<repo>` and `<branch>` are omitted, `devenv worktree rm` SHALL fail without changing anything. Its error message MUST say to pass `<repo> <branch>` or install `fzf`.
+
+#### 4.6.3. Cancelled picker
+
+IF the picker is cancelled, THEN `devenv worktree rm` SHALL exit with status `1` AND SHALL change nothing.
 
 ## 5. Examples
 
