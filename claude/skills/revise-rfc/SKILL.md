@@ -28,7 +28,7 @@ Do not use this skill for:
 
 ### 1. Read the target RFC and the format rules
 
-Read the RFC end-to-end, including its frontmatter status and any existing Amendments section. Read `../create-rfc/format-rules.md` — particularly "Status lifecycle and amendments" and the rules for the sections you'll touch (EARS and hierarchy for §4, interface augmentation for §3).
+Read the RFC end-to-end, including its frontmatter status and any existing Amendments section. Read `../create-rfc/format-rules.md` — particularly "Status lifecycle and amendments" and the rules for the sections you'll touch (EARS and hierarchy for §4, interface augmentation for §3). Before writing or changing any §4 requirement, read `../create-rfc/ears-guide.md` too.
 
 ### 2. Capture the change and the reasoning
 
@@ -66,7 +66,7 @@ The body is the current contract — edit it so that it reads true on its own. T
 
 While editing, follow the `create-rfc` format rules:
 
-- New or changed §4 requirements use EARS notation with RFC 2119 keywords for secondary obligations.
+- New or changed §4 requirements use EARS notation as `../create-rfc/ears-guide.md` specifies, with RFC 2119 keywords for secondary obligations.
 - Changes to a §3 interface defined by a _prior_ RFC follow the interface-augmentation pattern (diff fences, "Members not listed above are unchanged" closer). Changes to this RFC's own interface are edited in place.
 - If a change adds operations within the scope of an existing Invariants subsection, verify the invariant's scope statement still enumerates the right subsections.
 - Moving something in or out of scope means updating §6 too, so the fences stay accurate.

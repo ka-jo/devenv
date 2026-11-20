@@ -45,7 +45,7 @@ Create the file at `docs/rfcs/<NNNN>-<kebab-title>.md` (e.g., `docs/rfcs/0007-us
 
 Follow the structure in `template.md` exactly. Default `status:` to `Draft`. Do not set status to `Ready` — the human is responsible for that promotion.
 
-While drafting, consult `format-rules.md` for the conventions on EARS, RFC 2119 keywords, hierarchy, interface augmentation, and section content. Read it before writing the Behavior section in particular — that section has the most non-obvious conventions.
+While drafting, consult `format-rules.md` for the conventions on EARS, RFC 2119 keywords, hierarchy, interface augmentation, and section content. Read it, and `ears-guide.md`, before writing the Behavior section in particular — that section has the most non-obvious conventions.
 
 ### 4. Review with the user
 
@@ -67,6 +67,7 @@ This skill produces the spec. It does not implement against it. If the user asks
 
 - `template.md` — The exact RFC scaffold (frontmatter + section structure). Use this as the starting point for every new RFC.
 - `format-rules.md` — Conventions for EARS notation, RFC 2119 keyword usage, hierarchy heuristics, interface augmentation patterns, and what content belongs in each section. Read this before drafting the Interface and Behavior sections.
+- `ears-guide.md` — EARS condensed from its authors' definition, plus how RFCs apply it: which keyword each kind of condition takes, what counts as a trigger, how obligations are stated, and a checklist for §4. Read this before writing or revising any requirement.
 
 ## A note on examples
 

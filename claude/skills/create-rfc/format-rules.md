@@ -181,15 +181,20 @@ This is the most important section. It contains the behavioral contract that age
 
 ### EARS notation
 
-Use EARS (Easy Approach to Requirements Syntax) for individual requirements. The five patterns:
+Write every requirement in EARS (Easy Approach to Requirements Syntax). **Read `ears-guide.md` before drafting or revising §4**: it condenses EARS itself and sets the rules RFCs follow where EARS leaves a choice open. In brief:
 
-1. **Ubiquitous** (always true): `THE SYSTEM SHALL <response>`
-2. **Event-driven**: `WHEN <trigger> THE SYSTEM SHALL <response>`
-3. **State-driven**: `WHILE <state> THE SYSTEM SHALL <response>`
-4. **Unwanted behavior**: `IF <unwanted condition> THEN THE SYSTEM SHALL <response>`
-5. **Optional feature**: `WHERE <feature is included> THE SYSTEM SHALL <response>`
+1. **Ubiquitous** (always active): `THE SYSTEM SHALL <response>`
+2. **State-driven**: `WHILE <precondition(s)> THE SYSTEM SHALL <response>`
+3. **Event-driven**: `WHEN <trigger> THE SYSTEM SHALL <response>`
+4. **Optional feature**: `WHERE <feature is included> THE SYSTEM SHALL <response>`
+5. **Unwanted behavior**: `IF <trigger> THEN THE SYSTEM SHALL <response>`
+6. **Complex**: `WHILE <precondition(s)>, WHEN <trigger>, THE SYSTEM SHALL <response>`, with `IF … THEN` in place of `WHEN` for unwanted behavior.
 
-Patterns can be compounded: `WHILE <state>, WHEN <trigger>, THE SYSTEM SHALL <response>`.
+The rules people most often get wrong, each explained in the guide:
+
+- A trigger comes from outside the system. A command or function running is never its own trigger; with nothing else to set it apart, a requirement is ubiquitous.
+- `WHEN` is what the actor does on this invocation (arguments, options). `WHILE` is what was already true, the system's own mode included, even when it's bad. `IF … THEN` is something going wrong as it happens. `WHERE` is only for configured features.
+- Every obligation is a `SHALL`, an `AND SHALL`, or a `MUST` sentence, never a trailing clause.
 
 The point of EARS is to force explicit triggering conditions. "The system validates input" is uselessly vague. "WHEN `findById` receives a malformed UUID, `UserService` SHALL reject it with a `ValidationError` before any network call" is testable.
 
@@ -363,3 +368,6 @@ If there are no open questions during drafting, delete the section entirely rath
 - **Multiple unrelated `SHALL`s under one anchor**: a subsection bundling distinct triggers or responses lets a per-section coverage mark hide untested behaviors. Default to one `SHALL` per leaf; the only exceptions are effects that only make sense together, or a small set of `SHALL`s covering every value of one input (kept together on purpose).
 - **Behavior grouping forced to mirror Interface**: §4 organizes by mental model, not by interface shape. Don't force a per-operation grouping if the natural mental model is by state, phase, or concern. Significant divergence from §3 structure is worth examining but isn't forbidden.
 - **Bare "Note: ..." prose instead of an alert**: a plain paragraph starting with "Note:" sitting inline next to EARS statements is easy to mistake for normative text, or can accidentally hide normative content that should have been a `SHALL`. Use an alert (`> [!NOTE]` / `> [!WARNING]`) instead.
+- **Obligations hidden in trailing clauses**: "…SHALL fail, naming X" or a colon list after a `SHALL` states an obligation without grading it and usually without pinning it. Use `AND SHALL` for a further effect and a `MUST` sentence for a property of one (see `ears-guide.md` § "Responses and obligations").
+- **The system as its own trigger, or the wrong keyword for a condition**: "WHEN `devenv clone` runs" names the system as its trigger, and a persistent fact written as `IF` (or a bad argument written as `WHILE`) misstates when the requirement applies. See `ears-guide.md` § "What each keyword is for".
+- **Lead-in prose instead of conditions**: "What happens depends on whether…" followed by requirements that leave the condition out puts the condition in prose. Each requirement carries its own full condition; a lead-in may name the input being covered (as in "Leaf granularity"), but never stands in for a condition.
