@@ -243,6 +243,7 @@ Use these heuristics:
 - **Group by mental model**: For services and workflows, often by operation lifecycle. For CRUD-style APIs, often by resource. For state machines, often by state. For event-driven systems, often by event type or guarantee. For UI-driven features, often by user-facing action. Pick the axis that best communicates how someone would reason about the system, and apply it consistently — don't mix axes within a single grouping level.
 - **EARS requirements are leaves**: Don't nest EARS statements inside other EARS statements. If you want to express a compound condition, use a compound EARS pattern (e.g., `WHILE ... WHEN ...`) at a single level.
 - **Internal nodes describe scope**: Section headers like `§4.2 Read operations` get a brief prose intro describing what's covered; the actual EARS requirements live in the leaf subsections.
+- **Leaves hold only requirements and alerts**: A leaf contains EARS requirements, their RFC 2119 sentences, and alerts (§ "Notes and admonitions"), nothing else. No introductory prose, and no prose clause leading into a requirement ("X pages its output: it SHALL …"). Context a leaf needs goes in an alert after its requirements, or in its parent's intro when it describes the scope of several leaves.
 
 When the natural grouping is ambiguous, ask the user. Grouping is a design judgment that the user is better positioned to make than this skill.
 
